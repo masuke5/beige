@@ -54,29 +54,35 @@ impl<'a> fmt::Display for Error<'a> {
 
 #[cfg(debug_assertions)]
 macro_rules! error {
-    ($span:expr, $fmt: tt $(,$arg:expr)*) => {
+    ($span:expr, $fmt: tt $(,$arg:expr)*) => {{
+        use crate::error::{Error, ErrorList};
+
         ErrorList::push(Error::new(
             &format!(concat!($fmt, " <{}:{}>") $(,$arg)*, file!(), line!()),
             $span,
         ));
-    };
+    }};
 }
 
 #[cfg(not(debug_assertions))]
 macro_rules! error {
-    ($span:expr, $fmt: tt $(,$arg:expr)*) => {
+    ($span:expr, $fmt: tt $(,$arg:expr)*) => {{
+        use crate::error::{Error, ErrorList};
+
         ErrorList::push(Error::new(&format!($fmt $(,$arg)*), $span));
-    };
+    }};
 }
 
 #[cfg(debug_assertions)]
 macro_rules! warn {
-    ($span:expr, $fmt: tt $(,$arg:expr)*) => {
+    ($span:expr, $fmt: tt $(,$arg:expr)*) => {{
+        use crate::error::{Error, ErrorList};
+
         ErrorList::push(Error::new_warning(
             &format!(concat!($fmt, " <{}:{}>") $(,$arg)*, file!(), line!()),
             $span,
         ));
-    };
+    }};
 }
 
 #[cfg(not(debug_assertions))]

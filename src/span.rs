@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::id::Id;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -14,6 +16,16 @@ impl Span {
             file,
             line: 0,
             col: 0,
+        }
+    }
+}
+
+impl fmt::Display for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if f.alternate() {
+            write!(f, "{}:{}:{}", self.file, self.line, self.col)
+        } else {
+            write!(f, "{}:{}", self.line, self.col)
         }
     }
 }
