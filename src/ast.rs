@@ -48,11 +48,14 @@ pub enum ExprKind {
     Int(i64),
     Bool(bool),
     String(String),
+    Tuple(Vec<Expr>),
+    Record(Vec<(Spanned<Id>, Expr)>),
     Variable(Id),
     BinOp(BinOp, Box<Expr>, Box<Expr>),
     Let(Id, Box<Expr>),
     LetFun(Id, Function),
     Not(Box<Expr>),
+    Negative(Box<Expr>),
     Call(Box<Expr>, Box<Expr>),
     If(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
     Do(Vec<Expr>, Option<Box<Expr>>),
@@ -129,6 +132,20 @@ pub fn dump_expr(expr: &Expr, indent: usize) {
         E::Int(n) => println!("{} [{}]", n, expr.span),
         E::Bool(b) => println!("{}", if *b { "true" } else { "false" }),
         E::String(s) => println!("\"{}\", [{}]", escape_str(s), expr.span),
+        E::Tuple(exprs) => {
+            println!("tuple [{}]", expr.span);
+            for expr in exprs {
+                dump_expr(expr, indent + 1);
+            }
+        }
+        E::Record(fields) => {
+            println!("record [{}]", expr.span);
+            for (name, expr) in fields {
+                print_indent(indent);
+                println!("{}:", name.value);
+                dump_expr(expr, indent + 1);
+            }
+        }
         E::Variable(id) => println!("{}", id),
         E::BinOp(binop, lhs, rhs) => {
             println!("{} [{}]", binop.to_symbol(), expr.span);
@@ -150,6 +167,10 @@ pub fn dump_expr(expr: &Expr, indent: usize) {
         }
         E::Not(exp) => {
             println!("not [{}]", expr.span);
+            dump_expr(exp, indent + 1)
+        }
+        E::Negative(exp) => {
+            println!("neg [{}]", expr.span);
             dump_expr(exp, indent + 1)
         }
         E::Call(func, arg) => {
@@ -199,8 +220,8 @@ pub fn dump_type(ty: &Type, indent: usize) {
 
             for field in fields {
                 print_indent(indent);
-                print!("{}: ", field.name.value);
-                dump_type(&field.ty, 0);
+                println!("{}:", field.name.value);
+                dump_type(&field.ty, indent + 1);
             }
         }
         T::Tuple(types) => {
