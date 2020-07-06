@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 rustc-hash = "1.1"
 lazy_static = "1"
+typed-arena = "2"

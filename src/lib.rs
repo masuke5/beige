@@ -1,5 +1,7 @@
 #[macro_use]
 mod error;
+mod ast;
+mod dump;
 mod id;
 mod span;
 mod token;

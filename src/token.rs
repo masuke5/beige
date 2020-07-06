@@ -110,7 +110,7 @@ pub enum TokenKind {
     RightArrow,
 }
 
-fn escape_str(s: &str) -> String {
+pub fn escape_str(s: &str) -> String {
     fn alternate_str(ch: char) -> Option<Cow<'static, str>> {
         Some(match ch {
             '"' => "\\\"".into(),

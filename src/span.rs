@@ -32,12 +32,12 @@ impl fmt::Display for Span {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Spanned<T> {
-    pub kind: T,
+    pub value: T,
     pub span: Span,
 }
 
 impl<T> Spanned<T> {
-    pub fn new(kind: T, span: Span) -> Spanned<T> {
-        Self { kind, span }
+    pub fn new(value: T, span: Span) -> Spanned<T> {
+        Self { value, span }
     }
 }
