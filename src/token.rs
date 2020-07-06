@@ -108,6 +108,7 @@ pub enum TokenKind {
     GreaterThanOrEqual,
     NotEqual,
     RightArrow,
+    EOF,
 }
 
 pub fn escape_str(s: &str) -> String {
@@ -175,6 +176,7 @@ impl fmt::Display for TokenKind {
             Self::GreaterThanOrEqual => write!(f, ">="),
             Self::NotEqual => write!(f, "!="),
             Self::RightArrow => write!(f, "->"),
+            Self::EOF => write!(f, "EOF"),
         }
     }
 }

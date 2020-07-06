@@ -296,6 +296,8 @@ impl Lexer {
             self.skip_whitespaces();
         }
 
+        tokens.push(Token::new(TokenKind::EOF, self.current_span()));
+
         tokens
     }
 }
