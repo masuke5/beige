@@ -58,3 +58,14 @@ impl IdMap {
         id_map[&id].clone()
     }
 }
+
+pub mod reserved_id {
+    use super::{Id, IdMap};
+    use lazy_static::lazy_static;
+
+    // Basically use "$" that cannot use for identifiers
+    lazy_static! {
+        // Alternate ID when an error occured
+        pub static ref UNKNOWN: Id = IdMap::new_id("$unknown");
+    }
+}

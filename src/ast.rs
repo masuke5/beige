@@ -5,7 +5,7 @@ use crate::id::Id;
 use crate::span::{Span, Spanned};
 use crate::token::escape_str;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum BinOp {
     Add,
     Sub,
@@ -46,6 +46,7 @@ impl BinOp {
 #[derive(Debug, PartialEq, Clone)]
 pub enum ExprKind {
     Int(i64),
+    Float(f64),
     Bool(bool),
     String(String),
     Tuple(Vec<Expr>),
@@ -64,19 +65,26 @@ pub enum ExprKind {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Expr {
-    kind: ExprKind,
-    span: Span,
+    pub kind: ExprKind,
+    pub span: Span,
+}
+
+impl Expr {
+    pub fn new(kind: ExprKind, span: Span) -> Self {
+        Self { kind, span }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct RecordField {
-    name: Spanned<Id>,
-    ty: Type,
+    pub name: Spanned<Id>,
+    pub ty: Type,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum TypeKind {
     Int,
+    Float,
     Bool,
     String,
     Name(Id),
@@ -89,15 +97,15 @@ pub type Type = Spanned<TypeKind>;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Function {
-    name: Id,
-    params: Vec<Spanned<Id>>,
-    body: Box<Expr>,
+    pub name: Id,
+    pub params: Vec<Spanned<Id>>,
+    pub body: Box<Expr>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct TypeDef {
-    name: Id,
-    body: Type,
+    pub name: Id,
+    pub body: Type,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -117,10 +125,21 @@ impl Visibility {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Module {
-    path: Id,
-    constants: FxHashMap<Id, (Visibility, Expr)>,
-    types: FxHashMap<Id, (Visibility, TypeDef)>,
-    functions: FxHashMap<Id, (Visibility, Function)>,
+    pub path: Id,
+    pub constants: FxHashMap<Id, (Visibility, Expr)>,
+    pub types: FxHashMap<Id, (Visibility, TypeDef)>,
+    pub functions: FxHashMap<Id, (Visibility, Function)>,
+}
+
+impl Module {
+    pub fn new(path: Id) -> Self {
+        Self {
+            path,
+            constants: FxHashMap::default(),
+            types: FxHashMap::default(),
+            functions: FxHashMap::default(),
+        }
+    }
 }
 
 pub fn dump_expr(expr: &Expr, indent: usize) {
@@ -130,6 +149,7 @@ pub fn dump_expr(expr: &Expr, indent: usize) {
 
     match &expr.kind {
         E::Int(n) => println!("{} [{}]", n, expr.span),
+        E::Float(n) => println!("{} [{}]", n, expr.span),
         E::Bool(b) => println!("{}", if *b { "true" } else { "false" }),
         E::String(s) => println!("\"{}\", [{}]", escape_str(s), expr.span),
         E::Tuple(exprs) => {
@@ -146,7 +166,7 @@ pub fn dump_expr(expr: &Expr, indent: usize) {
                 dump_expr(expr, indent + 1);
             }
         }
-        E::Variable(id) => println!("{}", id),
+        E::Variable(id) => println!("`{}`", id),
         E::BinOp(binop, lhs, rhs) => {
             println!("{} [{}]", binop.to_symbol(), expr.span);
             dump_expr(lhs, indent + 1);
@@ -212,6 +232,7 @@ pub fn dump_type(ty: &Type, indent: usize) {
 
     match &ty.value {
         T::Int => println!("Int [{}]", ty.span),
+        T::Float => println!("Float [{}]", ty.span),
         T::String => println!("String [{}]", ty.span),
         T::Bool => println!("Bool [{}]", ty.span),
         T::Name(name) => println!("Name `{}` [{}]", name, ty.span),
@@ -241,14 +262,14 @@ pub fn dump_module(module: &Module, indent: usize) {
 
     for (name, (visibility, expr)) in &module.constants {
         print_indent(indent + 1);
-        print!("{}const {} =", visibility.as_str(), name);
-        dump_expr(expr, indent + 1);
+        println!("{}const {} =", visibility.as_str(), name);
+        dump_expr(expr, indent + 2);
     }
 
     for (name, (visibility, type_def)) in &module.types {
         print_indent(indent + 1);
-        print!("{}type {} =", visibility.as_str(), name);
-        dump_type(&type_def.body, indent + 1);
+        println!("{}type {} =", visibility.as_str(), name);
+        dump_type(&type_def.body, indent + 2);
     }
 
     for (name, (visibility, func)) in &module.functions {
@@ -257,8 +278,8 @@ pub fn dump_module(module: &Module, indent: usize) {
         for param_name in &func.params {
             print!(" {}", param_name.value);
         }
-        print!(" =");
+        println!(" =");
 
-        dump_expr(&func.body, indent + 1);
+        dump_expr(&func.body, indent + 2);
     }
 }

@@ -261,6 +261,7 @@ impl Lexer {
             '.' => self.symbol(TK::Dot),
             ':' => self.symbol(TK::Colon),
             ';' => self.symbol(TK::Semicolon),
+            ',' => self.symbol(TK::Comma),
             '=' => self.symbol(TK::Equal),
             '@' => self.symbol(TK::At),
             '(' => self.symbol(TK::LParen),

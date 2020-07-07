@@ -10,16 +10,6 @@ pub struct Span {
     pub col: u32,
 }
 
-impl Span {
-    pub fn zero(file: Id) -> Self {
-        Self {
-            file,
-            line: 0,
-            col: 0,
-        }
-    }
-}
-
 impl fmt::Display for Span {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {

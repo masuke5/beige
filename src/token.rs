@@ -96,6 +96,7 @@ pub enum TokenKind {
     Equal,
     At,
     Semicolon,
+    Comma,
     LParen,
     RParen,
     LBrace,
@@ -109,6 +110,15 @@ pub enum TokenKind {
     NotEqual,
     RightArrow,
     EOF,
+}
+
+impl TokenKind {
+    pub fn is_identifier(&self) -> bool {
+        match self {
+            Self::Identifier(_) => true,
+            _ => false,
+        }
+    }
 }
 
 pub fn escape_str(s: &str) -> String {
@@ -164,6 +174,7 @@ impl fmt::Display for TokenKind {
             Self::Equal => write!(f, "="),
             Self::At => write!(f, "@"),
             Self::Semicolon => write!(f, ";"),
+            Self::Comma => write!(f, ","),
             Self::LParen => write!(f, "("),
             Self::RParen => write!(f, ")"),
             Self::LBrace => write!(f, "{{"),
