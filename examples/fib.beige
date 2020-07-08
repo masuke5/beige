@@ -1,0 +1,8 @@
+fn fib x = do
+  if x = 0 or x = 1 then do
+    a
+  else do 
+    (fib (x - 1)) + (fib (x - 2))
+
+fn main =
+  print (fib 10)
