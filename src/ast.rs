@@ -59,7 +59,7 @@ pub enum ExprKind {
     Negative(Box<Expr>),
     Call(Box<Expr>, Box<Expr>),
     If(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
-    Do(Vec<Expr>, Option<Box<Expr>>),
+    Do(Vec<Expr>),
     // TODO: Add match, lambda and list expression
 }
 
@@ -212,14 +212,10 @@ pub fn dump_expr(expr: &Expr, indent: usize) {
                 dump_expr(else_expr, indent + 1);
             }
         }
-        E::Do(exprs, result_expr) => {
+        E::Do(exprs) => {
             println!("do [{}]", expr.span);
             for expr in exprs {
                 dump_expr(expr, indent + 1);
-            }
-
-            if let Some(result_expr) = result_expr {
-                dump_expr(result_expr, indent + 1)
             }
         }
     }

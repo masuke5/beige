@@ -43,10 +43,6 @@ impl Parser {
         self.tokens[self.pos].level
     }
 
-    fn prev(&self) -> &T {
-        &self.tokens[self.pos - 1].kind
-    }
-
     fn prev_span(&self) -> &Span {
         &self.tokens[self.pos - 1].span
     }
@@ -120,6 +116,11 @@ impl Parser {
         }
 
         result
+    }
+
+    fn eat_lf(&mut self) {
+        self.eat(&T::LF);
+        assert_ne!(self.curr(), &T::LF);
     }
 
     // }}}
@@ -427,7 +428,7 @@ impl Parser {
         self.expect(&T::Keyword(KW::Then));
 
         let then_clause = self.skip(Self::parse_expr, |t| {
-            *t == T::Keyword(KW::Else) || *t == T::Semicolon
+            *t == T::Keyword(KW::Else) || *t == T::LF
         });
 
         let else_clause = if self.eat(&T::Keyword(KW::Else)) {
@@ -448,6 +449,12 @@ impl Parser {
         let level = self.curr_level() + 1;
         self.eat_assert(&T::Keyword(KW::Do));
 
+        if !self.eat(&T::LF) {
+            error!(&span, "no line breaks");
+            self.skip_to(&[T::LF]);
+            self.next();
+        }
+
         let mut exprs = Vec::new();
 
         while self.curr_level() == level {
@@ -457,12 +464,12 @@ impl Parser {
                 return None;
             }
 
-            let expr = self.skip(Self::parse_expr, |t| *t == T::Semicolon);
+            let expr = self.skip(Self::parse_expr, |t| *t == T::LF);
             if let Some(expr) = expr {
                 exprs.push(expr);
             }
 
-            self.eat(&T::Semicolon);
+            self.eat_lf();
         }
 
         if self.curr_level() > level {
@@ -474,14 +481,7 @@ impl Parser {
             return None;
         }
 
-        let has_result = *self.prev() == T::Semicolon;
-        let result_expr = if has_result {
-            Some(Box::new(exprs.pop().unwrap()))
-        } else {
-            None
-        };
-
-        let expr = E::Do(exprs, result_expr);
+        let expr = E::Do(exprs);
         Some(Expr::new(expr, span))
     }
 
@@ -674,7 +674,9 @@ impl Parser {
         let mut module = Module::new(path);
 
         while *self.curr() != T::EOF {
+            self.eat_lf();
             self.parse_module_item(&mut module);
+            self.eat_lf();
         }
 
         Some(module)

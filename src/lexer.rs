@@ -82,7 +82,7 @@ impl Lexer {
 
     fn is_whitespace(ch: char) -> bool {
         match ch {
-            ' ' | '\t' | '\r' | '\n' => true,
+            ' ' | '\t' | '\r' => true,
             _ => false,
         }
     }
@@ -249,6 +249,7 @@ impl Lexer {
             '0'..='9' => self.lex_number(),
             '"' => self.lex_string(),
             ch if Self::is_identifier(ch) => self.lex_identifier(),
+            '\n' => self.symbol(TK::LF),
             '+' => self.symbol(TK::Plus),
             '-' if self.next_is('>') => self.large_symbol(TK::RightArrow),
             '-' => self.symbol(TK::Minus),
@@ -284,14 +285,21 @@ impl Lexer {
     }
 
     fn lex(mut self) -> Vec<Token> {
-        let mut tokens = Vec::new();
+        let mut tokens: Vec<Token> = Vec::new();
 
         while self.current() != '\0' {
             self.skip_whitespaces();
 
             let span = self.current_span();
             if let Some(kind) = self.next_token() {
-                tokens.push(Token::new(kind, span));
+                match tokens.last() {
+                    // Avoid to duplicate LF
+                    Some(last_token)
+                        if last_token.kind == TokenKind::LF && kind == TokenKind::LF => {}
+                    _ => {
+                        tokens.push(Token::new(kind, span));
+                    }
+                }
             }
 
             self.skip_whitespaces();

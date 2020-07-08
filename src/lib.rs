@@ -23,9 +23,9 @@ pub fn compile(directory: impl AsRef<Path>) {
 
     // Lex
     let tokens = lexer::lex(file, &code);
-    // for token in &tokens {
-    //     println!("{:<2 } {:#} {}", token.level, token.kind, token.span);
-    // }
+    for token in &tokens {
+        println!("{:<2 } {:#} {}", token.level, token.kind, token.span);
+    }
 
     // Parse
     let module = parser::parse(tokens, file);
