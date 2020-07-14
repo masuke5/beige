@@ -1,10 +1,12 @@
 #[macro_use]
 mod error;
-mod ast;
 mod dump;
 mod id;
 mod span;
+
+mod ast;
 mod token;
+mod ty;
 
 mod lexer;
 mod parser;
