@@ -2,6 +2,7 @@
 mod error;
 mod dump;
 mod id;
+mod scope_map;
 mod span;
 
 mod ast;
