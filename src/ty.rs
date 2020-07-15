@@ -63,9 +63,12 @@ impl TypePool {
     }
 }
 
+pub type MetaMap = FxHashMap<MetaVar, Type>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeError {
     Mismatch(Type, Type),
+    Circulation(Type, MetaVar),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +76,40 @@ pub enum Type {
     App(TypeCon, Vec<Type>),
     Var(TypeVar),
     Poly(Vec<TypeVar>, Box<Type>),
+    Meta(MetaVar),
+}
+
+impl Type {
+    pub fn contains_meta(&self, var: MetaVar) -> bool {
+        fn in_type(ty: &Type, var: MetaVar) -> bool {
+            match ty {
+                Type::App(tycon, types) => {
+                    in_tycon(tycon, var) || types.iter().any(|t| in_type(t, var))
+                }
+                Type::Var(..) => false,
+                Type::Poly(_, ty) => in_type(&ty, var),
+                Type::Meta(m) if *m == var => true,
+                Type::Meta(..) => false,
+            }
+        }
+
+        fn in_tycon(tycon: &TypeCon, var: MetaVar) -> bool {
+            match tycon {
+                TypeCon::TyFun(_, body) => in_type(&body, var),
+                TypeCon::Unique(tycon, _) => in_tycon(&tycon, var),
+                _ => false,
+            }
+        }
+
+        in_type(self, var)
+    }
+
+    pub fn is_meta(&self) -> bool {
+        match self {
+            Self::Meta(..) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -120,10 +157,16 @@ pub fn subst(pool: &mut TypePool, ty: Type, map: &FxHashMap<TypeVar, Type>) -> T
             let ty = subst(pool, *ty, &new_map);
             Type::Poly(new_vars, Box::new(ty))
         }
+        Type::Meta(m) => Type::Meta(m),
     }
 }
 
-pub fn unify(pool: &mut TypePool, a: Type, b: Type) -> Result<Type, TypeError> {
+pub fn unify(
+    pool: &mut TypePool,
+    metas: &mut MetaMap,
+    a: Type,
+    b: Type,
+) -> Result<Type, TypeError> {
     type T = Type;
     type C = TypeCon;
 
@@ -133,14 +176,14 @@ pub fn unify(pool: &mut TypePool, a: Type, b: Type) -> Result<Type, TypeError> {
             let new_map: FxHashMap<TypeVar, Type> =
                 params.into_iter().zip(args.into_iter()).collect();
             let a = subst(pool, *body, &new_map);
-            unify(pool, a, b)
+            unify(pool, metas, a, b)
         }
         (a, T::App(C::TyFun(params, body), args)) => {
             // Remove TyFun
             let new_map: FxHashMap<TypeVar, Type> =
                 params.into_iter().zip(args.into_iter()).collect();
             let b = subst(pool, *body, &new_map);
-            unify(pool, a, b)
+            unify(pool, metas, a, b)
         }
         (T::App(C::Unique(tycon, au), at), T::App(C::Unique(tycon_b, bu), bt)) => {
             if au != bu {
@@ -153,7 +196,7 @@ pub fn unify(pool: &mut TypePool, a: Type, b: Type) -> Result<Type, TypeError> {
                 let types: Result<Vec<Type>, TypeError> = at
                     .into_iter()
                     .zip(bt)
-                    .map(|(a, b)| unify(pool, a, b))
+                    .map(|(a, b)| unify(pool, metas, a, b))
                     .collect();
                 Ok(T::App(C::Unique(tycon, au), types?))
             }
@@ -161,7 +204,7 @@ pub fn unify(pool: &mut TypePool, a: Type, b: Type) -> Result<Type, TypeError> {
         (T::App(ac, at), T::App(bc, bt)) if ac == bc => {
             // Check manually to return a correct error
             for (at, bt) in at.iter().zip(bt.iter()) {
-                if at != bt {
+                if !at.is_meta() && !bt.is_meta() && at != bt {
                     return Err(TypeError::Mismatch(at.clone(), bt.clone()));
                 }
             }
@@ -169,7 +212,7 @@ pub fn unify(pool: &mut TypePool, a: Type, b: Type) -> Result<Type, TypeError> {
             let types: Result<Vec<Type>, TypeError> = at
                 .into_iter()
                 .zip(bt)
-                .map(|(a, b)| unify(pool, a, b))
+                .map(|(a, b)| unify(pool, metas, a, b))
                 .collect();
             Ok(T::App(ac, types?))
         }
@@ -179,9 +222,33 @@ pub fn unify(pool: &mut TypePool, a: Type, b: Type) -> Result<Type, TypeError> {
                 .zip(ap.iter().map(|var| T::Var(*var)))
                 .collect();
             let bt = subst(pool, *bt, &map);
-            Ok(T::Poly(ap, Box::new(unify(pool, *at, bt)?)))
+            Ok(T::Poly(ap, Box::new(unify(pool, metas, *at, bt)?)))
         }
         (T::Var(av), T::Var(bv)) if av == bv => Ok(T::Var(av)),
+        (T::Meta(am), b) => {
+            if let Some(ty) = metas.get(&am) {
+                return Ok(ty.clone());
+            }
+
+            match b {
+                T::App(C::TyFun(params, body), args) => {
+                    let map: FxHashMap<TypeVar, Type> = params.into_iter().zip(args).collect();
+                    let body = subst(pool, *body, &map);
+                    unify(pool, metas, T::Meta(am), body)
+                }
+                T::Meta(bm) => match metas.get(&bm).cloned() {
+                    Some(ty) => unify(pool, metas, T::Meta(am), ty),
+                    None => Ok(T::Meta(am)),
+                },
+                // Avoid circulation type, e.g. 'a = List<'a>
+                b if b.contains_meta(am) => Err(TypeError::Circulation(b.clone(), am)),
+                _ => {
+                    metas.insert(am, b.clone());
+                    Ok(b)
+                }
+            }
+        }
+        (a, T::Meta(m)) => unify(pool, metas, T::Meta(m), a),
         (a, b) => Err(TypeError::Mismatch(a, b)),
     }
 }
@@ -269,21 +336,34 @@ mod tests {
         let uniq = pool.new_unique();
 
         // int, int => int
-        assert_eq!(Ok(int()), unify(&mut pool, int(), int()));
+        assert_eq!(
+            Ok(int()),
+            unify(&mut pool, &mut FxHashMap::default(), int(), int())
+        );
         // (int, bool), (int, int) => error
         assert_eq!(
             Err(TypeError::Mismatch(bool(), int())),
             unify(
                 &mut pool,
+                &mut FxHashMap::default(),
                 T::App(C::Tuple, vec![int(), bool()]),
                 T::App(C::Tuple, vec![int(), int()])
             ),
         );
         // var, var => var
-        assert_eq!(Ok(T::Var(var)), unify(&mut pool, T::Var(var), T::Var(var)));
+        assert_eq!(
+            Ok(T::Var(var)),
+            unify(
+                &mut pool,
+                &mut FxHashMap::default(),
+                T::Var(var),
+                T::Var(var)
+            )
+        );
         // uniq, uniq => uniq
         assert!(unify(
             &mut pool,
+            &mut FxHashMap::default(),
             T::App(C::Unique(Box::new(C::Int), uniq), vec![]),
             T::App(C::Unique(Box::new(C::Bool), uniq), vec![]),
         )
@@ -301,6 +381,7 @@ mod tests {
             Ok(T::App(C::List, vec![bool()])),
             unify(
                 &mut pool,
+                &mut FxHashMap::default(),
                 T::App(
                     C::TyFun(vec![v1], Box::new(T::App(C::List, vec![T::Var(v1)]))),
                     vec![bool()],
@@ -328,6 +409,7 @@ mod tests {
             )),
             unify(
                 &mut pool,
+                &mut FxHashMap::default(),
                 T::Poly(vec![v1], Box::new(T::App(C::List, vec![T::Var(v1)]))),
                 T::Poly(vec![v2], Box::new(T::App(C::List, vec![T::Var(v2)]))),
             )
@@ -338,8 +420,70 @@ mod tests {
             Err(TypeError::Mismatch(Type::Var(v1), Type::Var(v3))),
             unify(
                 &mut pool,
+                &mut FxHashMap::default(),
                 T::Poly(vec![v1], Box::new(T::App(C::List, vec![T::Var(v1)]))),
                 T::Poly(vec![v2], Box::new(T::App(C::List, vec![T::Var(v3)]))),
+            )
+        );
+    }
+
+    #[test]
+    fn unify_with_meta() {
+        let mut pool = TypePool::new();
+        let v1 = pool.new_tyvar();
+        let m1 = pool.new_meta();
+        let m2 = pool.new_meta();
+
+        let mut metas = FxHashMap::default();
+
+        // (Meta(m1), Int), (Bool, Int) => (Bool, Int), metas += { m1 -> Bool }
+        assert_eq!(
+            Ok(T::App(C::Tuple, vec![bool(), int()])),
+            unify(
+                &mut pool,
+                &mut metas,
+                T::App(C::Tuple, vec![T::Meta(m1), int()]),
+                T::App(C::Tuple, vec![bool(), int()])
+            )
+        );
+
+        assert_eq!(Some(&bool()), metas.get(&m1));
+
+        // List<(fun(v1) -> v1)(Meta(m2))>, List<Meta(m1)> => List<Bool>, metas += { m2 -> Bool }
+        assert_eq!(
+            Ok(T::App(C::List, vec![bool()])),
+            unify(
+                &mut pool,
+                &mut metas,
+                T::App(
+                    C::TyFun(vec![v1], Box::new(T::App(C::List, vec![T::Var(v1)]))),
+                    vec![T::Meta(m2)]
+                ),
+                T::App(C::List, vec![T::Meta(m1)]),
+            )
+        );
+
+        assert_eq!(Some(&bool()), metas.get(&m2));
+    }
+
+    #[test]
+    fn unify_with_meta_circulation() {
+        let mut pool = TypePool::new();
+        let m1 = pool.new_meta();
+
+        let mut metas = FxHashMap::default();
+
+        // List<Meta(m1)>, List<(Int, Meta(m1))> => error
+        assert_eq!(
+            Err(TypeError::Circulation(
+                T::App(C::Tuple, vec![int(), T::Meta(m1)]),
+                m1
+            )),
+            unify(
+                &mut pool,
+                &mut metas,
+                T::App(C::List, vec![T::Meta(m1)]),
+                T::App(C::List, vec![T::App(C::Tuple, vec![int(), T::Meta(m1)])]),
             )
         );
     }
