@@ -253,6 +253,19 @@ pub fn unify(
     }
 }
 
+pub fn generate_arrow_type(params: &[Type], return_ty: &Type) -> Type {
+    if params.is_empty() {
+        panic!("too few param types");
+    }
+
+    let mut ty = return_ty.clone();
+    for param_ty in params.into_iter().rev() {
+        ty = Type::App(TypeCon::Arrow, vec![param_ty.clone(), ty]);
+    }
+
+    ty
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +279,10 @@ mod tests {
 
     fn bool() -> Type {
         T::App(C::Bool, vec![])
+    }
+
+    fn string() -> Type {
+        T::App(C::String, vec![])
     }
 
     #[test]
@@ -485,6 +502,22 @@ mod tests {
                 T::App(C::List, vec![T::Meta(m1)]),
                 T::App(C::List, vec![T::App(C::Tuple, vec![int(), T::Meta(m1)])]),
             )
+        );
+    }
+
+    #[test]
+    fn generate_arrow() {
+        assert_eq!(
+            T::App(C::Arrow, vec![int(), bool()]),
+            generate_arrow_type(&[int()], &bool()),
+        );
+
+        assert_eq!(
+            T::App(
+                C::Arrow,
+                vec![int(), T::App(C::Arrow, vec![bool(), string()]),]
+            ),
+            generate_arrow_type(&[int(), bool()], &T::App(C::String, vec![]))
         );
     }
 }

@@ -8,7 +8,7 @@ use crate::span::{Span, Spanned};
 use crate::token::{Keyword, Token, TokenKind};
 
 type T = TokenKind;
-type E = ExprKind;
+type E = ExprKind<Empty>;
 type KW = Keyword;
 
 lazy_static! {
@@ -127,7 +127,7 @@ impl Parser {
 
     // Common {{{
 
-    fn parse_function_from_name(&mut self, name: Id) -> Option<Function> {
+    fn parse_function_from_name(&mut self, name: Id) -> Option<UntypedFunction> {
         // Parse the parameters
         let mut params = Vec::new();
         while let T::Identifier(name) = self.curr() {
@@ -142,6 +142,7 @@ impl Parser {
         Some(Function {
             name,
             params,
+            param_types: Vec::new(),
             body: Box::new(body),
         })
     }
@@ -187,10 +188,10 @@ impl Parser {
     #[inline]
     fn parse_binop(
         &mut self,
-        mut parse: impl FnMut(&mut Self) -> Option<Expr>,
+        mut parse: impl FnMut(&mut Self) -> Option<UntypedExpr>,
         allow_join: bool,
         rules: &[(T, BinOp)],
-    ) -> Option<Expr> {
+    ) -> Option<UntypedExpr> {
         let mut lhs = parse(self)?;
 
         'outer: loop {
@@ -198,7 +199,7 @@ impl Parser {
                 if self.eat(token) {
                     let span = self.prev_span().clone();
                     let expr = E::BinOp(*binop, Box::new(lhs), Box::new(parse(self)?));
-                    lhs = Expr::new(expr, span);
+                    lhs = UntypedExpr::new(expr, span);
 
                     if allow_join {
                         return Some(lhs);
@@ -217,15 +218,15 @@ impl Parser {
     #[inline]
     fn parse_unary(
         &mut self,
-        mut parse: impl FnMut(&mut Self) -> Option<Expr>,
-        rules: &[(T, fn(Box<Expr>) -> ExprKind)],
-    ) -> Option<Expr> {
+        mut parse: impl FnMut(&mut Self) -> Option<UntypedExpr>,
+        rules: &[(T, fn(Box<UntypedExpr>) -> E)],
+    ) -> Option<UntypedExpr> {
         for (token, gen_expr) in rules {
             if self.eat(token) {
                 let span = self.prev_span().clone();
                 let expr = parse(self)?;
                 let expr = gen_expr(Box::new(expr));
-                return Some(Expr::new(expr, span));
+                return Some(UntypedExpr::new(expr, span));
             }
         }
 
@@ -242,7 +243,7 @@ impl Parser {
     // or
     // if, do, let
 
-    fn parse_record_field(&mut self) -> Option<(Spanned<Id>, Expr)> {
+    fn parse_record_field(&mut self) -> Option<(Spanned<Id>, UntypedExpr)> {
         let name_span = self.curr_span().clone();
         let name = self
             .skip(Self::expect_identifier, |t| *t == T::Colon)
@@ -256,7 +257,7 @@ impl Parser {
         Some((name, expr))
     }
 
-    fn parse_primary(&mut self) -> Option<Expr> {
+    fn parse_primary(&mut self) -> Option<UntypedExpr> {
         let span = self.curr_span().clone();
         let kind = match self.curr() {
             T::Int(n) => {
@@ -336,7 +337,7 @@ impl Parser {
             }
         };
 
-        Some(Expr::new(kind, span))
+        Some(UntypedExpr::new(kind, span))
     }
 
     fn token_is_arg(token: &T) -> bool {
@@ -351,7 +352,7 @@ impl Parser {
         }
     }
 
-    fn parse_call(&mut self) -> Option<Expr> {
+    fn parse_call(&mut self) -> Option<UntypedExpr> {
         let parse = Self::parse_primary;
 
         let mut func = parse(self)?;
@@ -359,20 +360,20 @@ impl Parser {
             let arg = parse(self)?;
             let span = arg.span.clone();
             let expr = E::Call(Box::new(func), Box::new(arg));
-            func = Expr::new(expr, span);
+            func = UntypedExpr::new(expr, span);
         }
 
         Some(func)
     }
 
-    fn parse_unaries(&mut self) -> Option<Expr> {
+    fn parse_unaries(&mut self) -> Option<UntypedExpr> {
         self.parse_unary(
             Self::parse_call,
             &[(T::Minus, E::Negative), (T::Keyword(KW::Not), E::Not)],
         )
     }
 
-    fn parse_mul(&mut self) -> Option<Expr> {
+    fn parse_mul(&mut self) -> Option<UntypedExpr> {
         self.parse_binop(
             Self::parse_unaries,
             true,
@@ -384,7 +385,7 @@ impl Parser {
         )
     }
 
-    fn parse_add(&mut self) -> Option<Expr> {
+    fn parse_add(&mut self) -> Option<UntypedExpr> {
         self.parse_binop(
             Self::parse_mul,
             true,
@@ -392,7 +393,7 @@ impl Parser {
         )
     }
 
-    fn parse_relational(&mut self) -> Option<Expr> {
+    fn parse_relational(&mut self) -> Option<UntypedExpr> {
         self.parse_binop(
             Self::parse_add,
             false,
@@ -407,7 +408,7 @@ impl Parser {
         )
     }
 
-    fn parse_and(&mut self) -> Option<Expr> {
+    fn parse_and(&mut self) -> Option<UntypedExpr> {
         self.parse_binop(
             Self::parse_relational,
             true,
@@ -415,11 +416,11 @@ impl Parser {
         )
     }
 
-    fn parse_or(&mut self) -> Option<Expr> {
+    fn parse_or(&mut self) -> Option<UntypedExpr> {
         self.parse_binop(Self::parse_and, true, &[(T::Keyword(KW::Or), BinOp::Or)])
     }
 
-    fn parse_if(&mut self) -> Option<Expr> {
+    fn parse_if(&mut self) -> Option<UntypedExpr> {
         let span = self.curr_span().clone();
         self.eat_assert(&T::Keyword(KW::If));
 
@@ -441,10 +442,10 @@ impl Parser {
         let then_clause = then_clause?;
 
         let expr = E::If(Box::new(cond), Box::new(then_clause), else_clause);
-        Some(Expr::new(expr, span))
+        Some(UntypedExpr::new(expr, span))
     }
 
-    fn parse_do(&mut self) -> Option<Expr> {
+    fn parse_do(&mut self) -> Option<UntypedExpr> {
         let span = self.curr_span().clone();
         let level = self.curr_level() + 1;
         self.eat_assert(&T::Keyword(KW::Do));
@@ -482,10 +483,10 @@ impl Parser {
         }
 
         let expr = E::Do(exprs);
-        Some(Expr::new(expr, span))
+        Some(UntypedExpr::new(expr, span))
     }
 
-    fn parse_let(&mut self) -> Option<Expr> {
+    fn parse_let(&mut self) -> Option<UntypedExpr> {
         let span = self.curr_span().clone();
         self.eat_assert(&T::Keyword(KW::Let));
 
@@ -499,18 +500,18 @@ impl Parser {
         if self.curr().is_identifier() {
             let func = self.parse_function_from_name(name)?;
             let expr = E::LetFun(name, func);
-            Some(Expr::new(expr, span))
+            Some(UntypedExpr::new(expr, span))
         } else if self.eat(&T::Equal) {
             let expr = self.parse_expr()?;
             let expr = E::Let(name, Box::new(expr));
-            Some(Expr::new(expr, span))
+            Some(UntypedExpr::new(expr, span))
         } else {
             error!(self.curr_span(), "expected identifier or =");
             None
         }
     }
 
-    fn parse_ifl(&mut self) -> Option<Expr> {
+    fn parse_ifl(&mut self) -> Option<UntypedExpr> {
         let parse = Self::parse_or;
 
         match self.curr() {
@@ -521,7 +522,7 @@ impl Parser {
         }
     }
 
-    fn parse_expr(&mut self) -> Option<Expr> {
+    fn parse_expr(&mut self) -> Option<UntypedExpr> {
         self.parse_ifl()
     }
 
@@ -592,7 +593,7 @@ impl Parser {
 
     // Module {{{
 
-    fn parse_module_item(&mut self, module: &mut Module) {
+    fn parse_module_item(&mut self, module: &mut UntypedModule) {
         // Parse the visibility
         let is_public = self.eat(&T::Keyword(KW::Public));
         let visibility = if is_public {
@@ -670,8 +671,8 @@ impl Parser {
         }
     }
 
-    fn parse_module(&mut self, path: Id) -> Option<Module> {
-        let mut module = Module::new(path);
+    fn parse_module(&mut self, path: Id) -> Option<UntypedModule> {
+        let mut module = UntypedModule::new(path);
 
         while *self.curr() != T::EOF {
             self.eat_lf();
@@ -684,12 +685,12 @@ impl Parser {
 
     // }}}
 
-    fn parse(mut self, path: Id) -> Option<Module> {
+    fn parse(mut self, path: Id) -> Option<UntypedModule> {
         self.parse_module(path)
     }
 }
 
-pub fn parse(tokens: Vec<Token>, path: Id) -> Option<Module> {
+pub fn parse(tokens: Vec<Token>, path: Id) -> Option<UntypedModule> {
     let parser = Parser::new(tokens);
     parser.parse(path)
 }

@@ -1,9 +1,19 @@
+use std::fmt::Debug;
+
 use rustc_hash::FxHashMap;
 
 use crate::dump::print_indent;
 use crate::id::Id;
 use crate::span::{Span, Spanned};
 use crate::token::escape_str;
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Empty;
+
+pub type UntypedExpr = Expr<Empty>;
+pub type UntypedExprKind = ExprKind<Empty>;
+pub type UntypedFunction = Function<Empty>;
+pub type UntypedModule = Module<Empty>;
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum BinOp {
@@ -44,34 +54,43 @@ impl BinOp {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum ExprKind {
+pub enum ExprKind<T> {
     Int(i64),
     Float(f64),
     Bool(bool),
     String(String),
-    Tuple(Vec<Expr>),
-    Record(Vec<(Spanned<Id>, Expr)>),
+    Tuple(Vec<Expr<T>>),
+    Record(Vec<(Spanned<Id>, Expr<T>)>),
     Variable(Id),
-    BinOp(BinOp, Box<Expr>, Box<Expr>),
-    Let(Id, Box<Expr>),
-    LetFun(Id, Function),
-    Not(Box<Expr>),
-    Negative(Box<Expr>),
-    Call(Box<Expr>, Box<Expr>),
-    If(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
-    Do(Vec<Expr>),
+    BinOp(BinOp, Box<Expr<T>>, Box<Expr<T>>),
+    Let(Id, Box<Expr<T>>),
+    LetFun(Id, Function<T>),
+    Not(Box<Expr<T>>),
+    Negative(Box<Expr<T>>),
+    Call(Box<Expr<T>>, Box<Expr<T>>),
+    If(Box<Expr<T>>, Box<Expr<T>>, Option<Box<Expr<T>>>),
+    Do(Vec<Expr<T>>),
     // TODO: Add match, lambda and list expression
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Expr {
-    pub kind: ExprKind,
+pub struct Expr<T> {
+    pub kind: ExprKind<T>,
     pub span: Span,
+    pub ty: T,
 }
 
-impl Expr {
-    pub fn new(kind: ExprKind, span: Span) -> Self {
-        Self { kind, span }
+impl<T> Expr<T> {
+    pub fn new(kind: ExprKind<Empty>, span: Span) -> Expr<Empty> {
+        Expr {
+            kind,
+            span,
+            ty: Empty,
+        }
+    }
+
+    pub fn with_ty(kind: ExprKind<T>, span: Span, ty: T) -> Expr<T> {
+        Expr { kind, span, ty }
     }
 }
 
@@ -96,10 +115,11 @@ pub enum TypeKind {
 pub type Type = Spanned<TypeKind>;
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Function {
+pub struct Function<T> {
     pub name: Id,
     pub params: Vec<Spanned<Id>>,
-    pub body: Box<Expr>,
+    pub param_types: Vec<T>,
+    pub body: Box<Expr<T>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -124,14 +144,14 @@ impl Visibility {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Module {
+pub struct Module<T: Debug + PartialEq + Clone> {
     pub path: Id,
-    pub constants: FxHashMap<Id, (Visibility, Expr)>,
+    pub constants: FxHashMap<Id, (Visibility, Expr<T>)>,
     pub types: FxHashMap<Id, (Visibility, TypeDef)>,
-    pub functions: FxHashMap<Id, (Visibility, Function)>,
+    pub functions: FxHashMap<Id, (Visibility, Function<T>)>,
 }
 
-impl Module {
+impl<T: Debug + PartialEq + Clone> Module<T> {
     pub fn new(path: Id) -> Self {
         Self {
             path,
@@ -142,10 +162,12 @@ impl Module {
     }
 }
 
-pub fn dump_expr(expr: &Expr, indent: usize) {
-    type E = ExprKind;
+pub fn dump_expr<T: Debug>(expr: &Expr<T>, indent: usize) {
+    type E<T> = ExprKind<T>;
 
     print_indent(indent);
+
+    print!("{{{:?}}} ", expr.ty);
 
     match &expr.kind {
         E::Int(n) => println!("{} [{}]", n, expr.span),
@@ -251,7 +273,7 @@ pub fn dump_type(ty: &Type, indent: usize) {
     }
 }
 
-pub fn dump_module(module: &Module, indent: usize) {
+pub fn dump_module<T: Debug + PartialEq + Clone>(module: &Module<T>, indent: usize) {
     print_indent(indent);
 
     println!("module {}", module.path);
@@ -274,7 +296,6 @@ pub fn dump_module(module: &Module, indent: usize) {
         for param_name in &func.params {
             print!(" {}", param_name.value);
         }
-        println!(" =");
 
         dump_expr(&func.body, indent + 2);
     }

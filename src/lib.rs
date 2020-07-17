@@ -11,6 +11,7 @@ mod ty;
 
 mod lexer;
 mod parser;
+mod typing;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -76,6 +77,20 @@ pub fn compile(option: CompileOption) {
     if option.output == OutputType::AST {
         if let Some(module) = module {
             ast::dump_module(&module, 0);
+        }
+        return;
+    }
+
+    if module.is_none() {
+        return;
+    }
+
+    // Type
+    let typed_module = typing::infer_module(module.unwrap());
+
+    if option.output == OutputType::TypedAST {
+        if let Some(typed_module) = typed_module {
+            ast::dump_module(&typed_module, 0);
         }
         return;
     }
