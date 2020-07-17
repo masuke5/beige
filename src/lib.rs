@@ -50,6 +50,11 @@ impl CompileOption {
 }
 
 pub fn compile(option: CompileOption) {
+    let dump_option = ast::DumpOption {
+        show_type: true,
+        show_span: true,
+    };
+
     let main_file = option.directory.join(MAIN_MODULE_FILE);
     let file = IdMap::new_id(&format!("{}", main_file.display()));
 
@@ -76,7 +81,7 @@ pub fn compile(option: CompileOption) {
 
     if option.output == OutputType::AST {
         if let Some(module) = module {
-            ast::dump_module(&module, 0);
+            ast::dump_module(&module, 0, &dump_option);
         }
         return;
     }
@@ -90,7 +95,7 @@ pub fn compile(option: CompileOption) {
 
     if option.output == OutputType::TypedAST {
         if let Some(typed_module) = typed_module {
-            ast::dump_module(&typed_module, 0);
+            ast::dump_module(&typed_module, 0, &dump_option);
         }
         return;
     }

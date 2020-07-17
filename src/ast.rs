@@ -168,14 +168,31 @@ impl<T: Debug + PartialEq + Clone> Module<T> {
     }
 }
 
-pub fn dump_expr<T: Display>(expr: &Expr<T>, indent: usize) {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DumpOption {
+    pub show_type: bool,
+    pub show_span: bool,
+}
+
+pub fn dump_expr<T: Display>(expr: &Expr<T>, indent: usize, option: &DumpOption) {
     type E<T> = ExprKind<T>;
 
     print_indent(indent);
 
-    println!("\x1b[93m{{{}}} [{}]\x1b[0m", expr.ty, expr.span);
+    if option.show_type || option.show_span {
+        print!("\x1b[93m");
 
-    print_indent(indent);
+        if option.show_type {
+            print!("{{{}}} ", expr.ty);
+        }
+
+        if option.show_span {
+            print!("[{}] ", expr.span);
+        }
+
+        println!("\x1b[0m");
+        print_indent(indent);
+    }
 
     match &expr.kind {
         E::Int(n) => println!("{}", n),
@@ -185,7 +202,7 @@ pub fn dump_expr<T: Display>(expr: &Expr<T>, indent: usize) {
         E::Tuple(exprs) => {
             println!("tuple");
             for expr in exprs {
-                dump_expr(expr, indent + 1);
+                dump_expr(expr, indent + 1, option);
             }
         }
         E::Record(fields) => {
@@ -193,18 +210,18 @@ pub fn dump_expr<T: Display>(expr: &Expr<T>, indent: usize) {
             for (name, expr) in fields {
                 print_indent(indent);
                 println!("{}:", name.value);
-                dump_expr(expr, indent + 1);
+                dump_expr(expr, indent + 1, option);
             }
         }
         E::Variable(id) => println!("`{}`", id),
         E::BinOp(binop, lhs, rhs) => {
             println!("{}", binop.to_symbol());
-            dump_expr(lhs, indent + 1);
-            dump_expr(rhs, indent + 1);
+            dump_expr(lhs, indent + 1, option);
+            dump_expr(rhs, indent + 1, option);
         }
         E::Let(name, exp) => {
             println!("let {} =", name);
-            dump_expr(exp, indent + 1);
+            dump_expr(exp, indent + 1, option);
         }
         E::LetFun(name, func) => {
             print!("let {}", name);
@@ -213,45 +230,45 @@ pub fn dump_expr<T: Display>(expr: &Expr<T>, indent: usize) {
             }
             println!(" =");
 
-            dump_expr(&func.body, indent + 1);
+            dump_expr(&func.body, indent + 1, option);
         }
         E::Not(exp) => {
             println!("not");
-            dump_expr(exp, indent + 1)
+            dump_expr(exp, indent + 1, option)
         }
         E::Negative(exp) => {
             println!("neg");
-            dump_expr(exp, indent + 1)
+            dump_expr(exp, indent + 1, option)
         }
         E::Call(func, arg) => {
             println!("call");
-            dump_expr(func, indent + 1);
-            dump_expr(arg, indent + 1);
+            dump_expr(func, indent + 1, option);
+            dump_expr(arg, indent + 1, option);
         }
         E::If(cond, then_expr, else_expr) => {
             println!("if");
-            dump_expr(cond, indent + 1);
+            dump_expr(cond, indent + 1, option);
 
             print_indent(indent);
             println!("then");
-            dump_expr(then_expr, indent + 1);
+            dump_expr(then_expr, indent + 1, option);
 
             if let Some(else_expr) = else_expr {
                 print_indent(indent);
                 println!("else");
-                dump_expr(else_expr, indent + 1);
+                dump_expr(else_expr, indent + 1, option);
             }
         }
         E::Do(exprs) => {
             println!("do");
             for expr in exprs {
-                dump_expr(expr, indent + 1);
+                dump_expr(expr, indent + 1, option);
             }
         }
     }
 }
 
-pub fn dump_type(ty: &Type, indent: usize) {
+pub fn dump_type(ty: &Type, indent: usize, option: &DumpOption) {
     type T = TypeKind;
 
     print_indent(indent);
@@ -268,20 +285,24 @@ pub fn dump_type(ty: &Type, indent: usize) {
             for field in fields {
                 print_indent(indent);
                 println!("{}:", field.name.value);
-                dump_type(&field.ty, indent + 1);
+                dump_type(&field.ty, indent + 1, option);
             }
         }
         T::Tuple(types) => {
             println!("Tuple [{}]", ty.span);
 
             for ty in types {
-                dump_type(&ty, indent + 1)
+                dump_type(&ty, indent + 1, option)
             }
         }
     }
 }
 
-pub fn dump_module<T: Debug + PartialEq + Clone + Display>(module: &Module<T>, indent: usize) {
+pub fn dump_module<T: Debug + PartialEq + Clone + Display>(
+    module: &Module<T>,
+    indent: usize,
+    option: &DumpOption,
+) {
     print_indent(indent);
 
     println!("module {}", module.path);
@@ -289,13 +310,13 @@ pub fn dump_module<T: Debug + PartialEq + Clone + Display>(module: &Module<T>, i
     for (name, (visibility, expr)) in &module.constants {
         print_indent(indent + 1);
         println!("{}const {} =", visibility.as_str(), name);
-        dump_expr(expr, indent + 2);
+        dump_expr(expr, indent + 2, option);
     }
 
     for (name, (visibility, type_def)) in &module.types {
         print_indent(indent + 1);
         println!("{}type {} =", visibility.as_str(), name);
-        dump_type(&type_def.body, indent + 2);
+        dump_type(&type_def.body, indent + 2, option);
     }
 
     for (name, (visibility, func)) in &module.functions {
@@ -306,6 +327,6 @@ pub fn dump_module<T: Debug + PartialEq + Clone + Display>(module: &Module<T>, i
         }
         println!(" = ");
 
-        dump_expr(&func.body, indent + 2);
+        dump_expr(&func.body, indent + 2, option);
     }
 }
