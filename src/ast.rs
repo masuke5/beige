@@ -1,4 +1,4 @@
-use std::fmt::Debug;
+use std::fmt::{self, Debug, Display};
 
 use rustc_hash::FxHashMap;
 
@@ -9,6 +9,12 @@ use crate::token::escape_str;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Empty;
+
+impl fmt::Display for Empty {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "")
+    }
+}
 
 pub type UntypedExpr = Expr<Empty>;
 pub type UntypedExprKind = ExprKind<Empty>;
@@ -162,26 +168,28 @@ impl<T: Debug + PartialEq + Clone> Module<T> {
     }
 }
 
-pub fn dump_expr<T: Debug>(expr: &Expr<T>, indent: usize) {
+pub fn dump_expr<T: Display>(expr: &Expr<T>, indent: usize) {
     type E<T> = ExprKind<T>;
 
     print_indent(indent);
 
-    print!("{{{:?}}} ", expr.ty);
+    println!("\x1b[93m{{{}}} [{}]\x1b[0m", expr.ty, expr.span);
+
+    print_indent(indent);
 
     match &expr.kind {
-        E::Int(n) => println!("{} [{}]", n, expr.span),
-        E::Float(n) => println!("{} [{}]", n, expr.span),
+        E::Int(n) => println!("{}", n),
+        E::Float(n) => println!("{}", n),
         E::Bool(b) => println!("{}", if *b { "true" } else { "false" }),
-        E::String(s) => println!("\"{}\", [{}]", escape_str(s), expr.span),
+        E::String(s) => println!("\"{}\"", escape_str(s)),
         E::Tuple(exprs) => {
-            println!("tuple [{}]", expr.span);
+            println!("tuple");
             for expr in exprs {
                 dump_expr(expr, indent + 1);
             }
         }
         E::Record(fields) => {
-            println!("record [{}]", expr.span);
+            println!("record");
             for (name, expr) in fields {
                 print_indent(indent);
                 println!("{}:", name.value);
@@ -190,12 +198,12 @@ pub fn dump_expr<T: Debug>(expr: &Expr<T>, indent: usize) {
         }
         E::Variable(id) => println!("`{}`", id),
         E::BinOp(binop, lhs, rhs) => {
-            println!("{} [{}]", binop.to_symbol(), expr.span);
+            println!("{}", binop.to_symbol());
             dump_expr(lhs, indent + 1);
             dump_expr(rhs, indent + 1);
         }
         E::Let(name, exp) => {
-            println!("let {} = [{}]", name, expr.span);
+            println!("let {} =", name);
             dump_expr(exp, indent + 1);
         }
         E::LetFun(name, func) => {
@@ -203,25 +211,25 @@ pub fn dump_expr<T: Debug>(expr: &Expr<T>, indent: usize) {
             for param_name in &func.params {
                 print!(" {}", param_name.value);
             }
-            println!(" = [{}]", expr.span);
+            println!(" =");
 
             dump_expr(&func.body, indent + 1);
         }
         E::Not(exp) => {
-            println!("not [{}]", expr.span);
+            println!("not");
             dump_expr(exp, indent + 1)
         }
         E::Negative(exp) => {
-            println!("neg [{}]", expr.span);
+            println!("neg");
             dump_expr(exp, indent + 1)
         }
         E::Call(func, arg) => {
-            println!("call [{}]", expr.span);
+            println!("call");
             dump_expr(func, indent + 1);
             dump_expr(arg, indent + 1);
         }
         E::If(cond, then_expr, else_expr) => {
-            println!("if [{}]", expr.span);
+            println!("if");
             dump_expr(cond, indent + 1);
 
             print_indent(indent);
@@ -235,7 +243,7 @@ pub fn dump_expr<T: Debug>(expr: &Expr<T>, indent: usize) {
             }
         }
         E::Do(exprs) => {
-            println!("do [{}]", expr.span);
+            println!("do");
             for expr in exprs {
                 dump_expr(expr, indent + 1);
             }
@@ -273,7 +281,7 @@ pub fn dump_type(ty: &Type, indent: usize) {
     }
 }
 
-pub fn dump_module<T: Debug + PartialEq + Clone>(module: &Module<T>, indent: usize) {
+pub fn dump_module<T: Debug + PartialEq + Clone + Display>(module: &Module<T>, indent: usize) {
     print_indent(indent);
 
     println!("module {}", module.path);
@@ -296,6 +304,7 @@ pub fn dump_module<T: Debug + PartialEq + Clone>(module: &Module<T>, indent: usi
         for param_name in &func.params {
             print!(" {}", param_name.value);
         }
+        println!(" = ");
 
         dump_expr(&func.body, indent + 2);
     }

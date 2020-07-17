@@ -31,14 +31,11 @@ macro_rules! try_unify {
         $a.ty = match unify(&mut $self.pool, $metas, $a.ty.clone(), $b) {
             Ok(t) => t,
             Err(TypeError::Mismatch(ad, bd)) => {
-                error!(&$a.span, "`{:?}` is not equivalent to `{:?}`", ad, bd);
+                error!(&$a.span, "`{}` is not equivalent to `{}`", ad, bd);
                 return None;
             }
             Err(TypeError::Circulation(ty, metavar)) => {
-                error!(
-                    &$a.span,
-                    "detected circulation: `{:?}` in `{:?}`", metavar, ty
-                );
+                error!(&$a.span, "detected circulation: `{}` in `{}`", metavar, ty);
                 return None;
             }
         }
@@ -266,6 +263,7 @@ impl Typing {
             let ty = match metas.get(&metavar) {
                 Some(ty) => ty.clone(),
                 None => {
+                    // TODO: generalize
                     warn!(&name.span, "cannot infer type");
                     T::App(C::Unit, vec![])
                 }

@@ -1,13 +1,22 @@
+use std::fmt;
 use std::iter;
 
 use rustc_hash::FxHashMap;
 
+use crate::dump::format_iter;
 use crate::id::Id;
 
 macro_rules! define_unique {
     ($unique:ident, $generator:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $unique(u64);
+
+        impl $unique {
+            #[allow(dead_code)]
+            pub fn raw(&self) -> u64 {
+                self.0
+            }
+        }
 
         #[derive(Debug)]
         pub struct $generator {
@@ -33,6 +42,18 @@ macro_rules! define_unique {
 define_unique!(TypeVar, TypeVarGenerator);
 define_unique!(MetaVar, MetaVarGenerator);
 define_unique!(Unique, UniqueGenerator);
+
+impl fmt::Display for TypeVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "'_{}", self.raw())
+    }
+}
+
+impl fmt::Display for MetaVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "${}", self.raw())
+    }
+}
 
 #[derive(Debug)]
 pub struct TypePool {
@@ -112,6 +133,40 @@ impl Type {
     }
 }
 
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        type C = TypeCon;
+
+        match self {
+            Self::App(C::Int, _) => write!(f, "Int"),
+            Self::App(C::Float, _) => write!(f, "Float"),
+            Self::App(C::String, _) => write!(f, "String"),
+            Self::App(C::Bool, _) => write!(f, "Bool"),
+            Self::App(C::Unit, _) => write!(f, "Unit"),
+            Self::App(C::Arrow, types) => write!(f, "{} -> {}", types[0], types[1]),
+            Self::App(C::Tuple, types) => write!(f, "({})", format_iter(types, ", ")),
+            Self::App(C::Record(fields), types) => write!(
+                f,
+                "{{ {} }}",
+                format_iter(
+                    fields
+                        .iter()
+                        .zip(types.iter())
+                        .map(|(name, ty)| format!("{} : {}", name, ty)),
+                    ", "
+                )
+            ),
+            Self::App(tycon, types) => write!(f, "{}<{}>", tycon, format_iter(types, ", ")),
+            Self::Var(var) => write!(f, "{}", var),
+            #[cfg(debug_assertions)]
+            Self::Poly(vars, body) => write!(f, "poly<{}>({})", format_iter(vars, ", "), body),
+            #[cfg(not(debug_assertions))]
+            Self::Poly(_, body) => write!(f, "{}", body),
+            Self::Meta(metavar) => write!(f, "{}", metavar),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypeCon {
     Int,
@@ -125,6 +180,26 @@ pub enum TypeCon {
     Record(Vec<Id>),
     TyFun(Vec<TypeVar>, Box<Type>),
     Unique(Box<TypeCon>, Unique),
+}
+
+impl fmt::Display for TypeCon {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Int => write!(f, "Int"),
+            Self::Float => write!(f, "Float"),
+            Self::String => write!(f, "String"),
+            Self::Bool => write!(f, "Bool"),
+            Self::Unit => write!(f, "Unit"),
+            Self::List => write!(f, "List"),
+            Self::Arrow => write!(f, "Arrow"),
+            Self::Tuple => write!(f, "Tuple"),
+            Self::Record(fields) => write!(f, "Record([{}])", format_iter(fields, ", ")),
+            Self::TyFun(params, body) => {
+                write!(f, "(fun ({}) -> {})", format_iter(params, ", "), body)
+            }
+            Self::Unique(tycon, uniq) => write!(f, "uniq{}({})", uniq.raw(), tycon),
+        }
+    }
 }
 
 pub fn subst(pool: &mut TypePool, ty: Type, map: &FxHashMap<TypeVar, Type>) -> Type {
@@ -238,7 +313,7 @@ pub fn unify(
                 }
                 T::Meta(bm) => match metas.get(&bm).cloned() {
                     Some(ty) => unify(pool, metas, T::Meta(am), ty),
-                    None => Ok(T::Meta(am)),
+                    None => Ok(T::Meta(bm)),
                 },
                 // Avoid circulation type, e.g. 'a = List<'a>
                 b if b.contains_meta(am) => Err(TypeError::Circulation(b.clone(), am)),
