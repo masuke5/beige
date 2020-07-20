@@ -6,6 +6,7 @@ mod scope_map;
 mod span;
 
 mod ast;
+mod ir;
 mod token;
 mod ty;
 
