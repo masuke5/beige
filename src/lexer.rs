@@ -99,7 +99,7 @@ impl Lexer {
         let mut n = 0u64;
         while self.current().is_digit(radix) {
             let digit = self.current().to_digit(radix).unwrap() as u64;
-            n += n * radix as u64 + digit;
+            n = n * radix as u64 + digit;
             self.advance();
         }
 
