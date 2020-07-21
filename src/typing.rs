@@ -9,10 +9,10 @@ type AT = AstTypeKind;
 type T = Type;
 type C = TypeCon;
 
-type TypedExpr = Expr<Type>;
-type TypedExprKind = ExprKind<Type>;
-type TypedFunction = Function<Type>;
-type TypedModule = Module<Type>;
+pub type TypedExpr = Expr<Type>;
+pub type TypedExprKind = ExprKind<Type>;
+pub type TypedFunction = Function<Type>;
+pub type TypedModule = Module<Type>;
 
 macro_rules! try_some {
     ($($var:ident),*) => {

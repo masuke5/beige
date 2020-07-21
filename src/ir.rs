@@ -2,10 +2,11 @@ use std::fmt;
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use lazy_static::lazy_static;
 use rustc_hash::FxHashMap;
 
 use crate::dump::format_iter;
-use crate::id::Id;
+use crate::id::{Id, IdMap};
 use crate::token::escape_str;
 
 macro_rules! define_unique {
@@ -35,7 +36,11 @@ define_unique!(Label, NEXT_LABEL);
 
 impl fmt::Display for Temp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "t{}", self.raw())
+        if *self == *TEMP_FP {
+            write!(f, "tFP")
+        } else {
+            write!(f, "t{}", self.raw())
+        }
     }
 }
 
@@ -43,6 +48,11 @@ impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, ".L{}", self.raw())
     }
+}
+
+lazy_static! {
+    // frame pointer
+    pub static ref TEMP_FP: Temp = Temp::new();
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,10 +94,13 @@ pub enum Op {
     Load(Temp, Temp),
     Store(Temp, Temp),
     Addr(Temp, Label),
-    Call(Temp, Id, Id, Vec<Temp>),
+    Func(Temp, Option<Id>, Id),
+    Call(Temp, Temp, Vec<Temp>),
+    CCall(Temp, Id, Vec<Temp>),
     Label(Label),
     JumpIf(Cmp, Temp, Temp, Label),
     Jump(Label),
+    Return(Temp),
 }
 
 impl fmt::Display for Op {
@@ -109,36 +122,49 @@ impl fmt::Display for Op {
             Self::Negative(dst, src) => write!(f, "{} <- -{}", dst, src),
             Self::Load(dst, loc) => write!(f, "{} <- [{}]", dst, loc),
             Self::Store(loc, src) => write!(f, "[{}] <- {}", loc, src),
+            Self::Func(dst, Some(module), func) => write!(f, "{} <- {}::{}", dst, module, func),
+            Self::Func(dst, None, func) => write!(f, "{} <- $self::{}", dst, func),
             Self::Addr(dst, label) => write!(f, "{} <- &{}", dst, label),
-            Self::Call(dst, module, func, args) => write!(
-                f,
-                "{} <- {}::{}({})",
-                dst,
-                module,
-                func,
-                format_iter(args, ", ")
-            ),
+            Self::Call(dst, func, args) => {
+                write!(f, "{} <- call {}({})", dst, func, format_iter(args, ", "))
+            }
+            Self::CCall(dst, name, args) => {
+                write!(f, "{} <- ccall {}({})", dst, name, format_iter(args, ", "))
+            }
             Self::Label(label) => write!(f, "{}:", label),
             Self::JumpIf(cmp, lhs, rhs, dest) => {
                 write!(f, "jump {} if {} {} {}", dest, lhs, cmp, rhs)
             }
             Self::Jump(dest) => write!(f, "jump {}", dest),
+            Self::Return(src) => write!(f, "return {}", src),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
-    name: Id,
-    params: Vec<Temp>,
-    body: Vec<Op>,
+    pub name: Id,
+    pub params: Vec<Temp>,
+    pub body: Vec<Op>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Module {
-    path: Id,
-    functions: FxHashMap<Id, Function>,
-    strings: FxHashMap<Label, String>,
+    pub path: Id,
+    pub functions: FxHashMap<Id, Function>,
+    pub strings: FxHashMap<Label, String>,
+    pub data: FxHashMap<Label, Vec<u8>>,
+}
+
+impl Module {
+    pub fn new(path: Id) -> Self {
+        Self {
+            path,
+            functions: FxHashMap::default(),
+            strings: FxHashMap::default(),
+            data: FxHashMap::default(),
+        }
+    }
 }
 
 pub fn dump_module(module: &Module) {
@@ -148,10 +174,22 @@ pub fn dump_module(module: &Module) {
         println!("  {}: \"{}\"", label, escape_str(string))
     }
 
+    for (label, data) in &module.data {
+        println!(
+            "  {}: {}",
+            label,
+            format_iter(data.iter().map(|n| format!("{:02X}", n)), " ")
+        );
+    }
+
     for (name, func) in &module.functions {
         println!("  {}({}):", name, format_iter(&func.params, ", "));
         for op in &func.body {
-            println!("    {}", op);
+            if let Op::Label(..) = op {
+                println!("  {}", op);
+            } else {
+                println!("    {}", op);
+            }
         }
     }
 }

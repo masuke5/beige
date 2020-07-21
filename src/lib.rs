@@ -1,3 +1,5 @@
+#![feature(box_patterns)]
+
 #[macro_use]
 mod error;
 mod dump;
@@ -10,6 +12,7 @@ mod ir;
 mod token;
 mod ty;
 
+mod gen_ir;
 mod lexer;
 mod parser;
 mod typing;
@@ -102,6 +105,16 @@ pub fn compile(option: CompileOption) {
     }
 
     if error::ErrorList::has_error() {
+        return;
+    }
+
+    // Generate IR
+    let ir_module = gen_ir::gen_ir(typed_module.unwrap());
+
+    if option.output == OutputType::IR {
+        if let Some(ir_module) = ir_module {
+            ir::dump_module(&ir_module);
+        }
         return;
     }
 }
