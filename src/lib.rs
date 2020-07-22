@@ -1,4 +1,4 @@
-#![feature(box_patterns)]
+#![feature(box_patterns, box_syntax)]
 
 #[macro_use]
 mod error;

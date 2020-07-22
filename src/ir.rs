@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use lazy_static::lazy_static;
 use rustc_hash::FxHashMap;
 
-use crate::dump::format_iter;
-use crate::id::{Id, IdMap};
+use crate::dump::{format_iter, print_indent};
+use crate::id::Id;
 use crate::token::escape_str;
 
 macro_rules! define_unique {
@@ -75,77 +75,44 @@ impl fmt::Display for Cmp {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Op {
-    // dst <- src
-    Int(Temp, i64),
-    Float(Temp, f64),
-    Move(Temp, Temp),
-    Add(Temp, Temp, Temp),
-    Sub(Temp, Temp, Temp),
-    Mul(Temp, Temp, Temp),
-    Div(Temp, Temp, Temp),
-    Mod(Temp, Temp, Temp),
-    AddF(Temp, Temp, Temp),
-    SubF(Temp, Temp, Temp),
-    MulF(Temp, Temp, Temp),
-    DivF(Temp, Temp, Temp),
-    Not(Temp, Temp),
-    Negative(Temp, Temp),
-    Load(Temp, Temp),
-    Store(Temp, Temp),
-    Addr(Temp, Label),
-    Func(Temp, Option<Id>, Id),
-    Call(Temp, Temp, Vec<Temp>),
-    CCall(Temp, Id, Vec<Temp>),
-    Label(Label),
-    JumpIf(Cmp, Temp, Temp, Label),
-    Jump(Label),
-    Return(Temp),
+pub enum Expr {
+    Int(i64),
+    Float(i64),
+    Temp(Temp),
+    Add(Box<Expr>, Box<Expr>),
+    Sub(Box<Expr>, Box<Expr>),
+    Mul(Box<Expr>, Box<Expr>),
+    Div(Box<Expr>, Box<Expr>),
+    Mod(Box<Expr>, Box<Expr>),
+    AddF(Box<Expr>, Box<Expr>),
+    SubF(Box<Expr>, Box<Expr>),
+    MulF(Box<Expr>, Box<Expr>),
+    DivF(Box<Expr>, Box<Expr>),
+    Not(Box<Expr>),
+    Negative(Box<Expr>),
+    Load(Box<Expr>),
+    Addr(Label),
+    Func(Option<Id>, Id),
+    Call(Box<Expr>, Vec<Expr>),
+    CCall(Id, Vec<Expr>),
+    Seq(Vec<Stmt>, Box<Expr>),
 }
 
-impl fmt::Display for Op {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Int(dst, n) => write!(f, "{} <- {}", dst, n),
-            Self::Float(dst, n) => write!(f, "{} <- {}", dst, n),
-            Self::Move(dst, src) => write!(f, "{} <- {}", dst, src),
-            Self::Add(dst, lhs, rhs) => write!(f, "{} <- {} + {}", dst, lhs, rhs),
-            Self::Sub(dst, lhs, rhs) => write!(f, "{} <- {} - {}", dst, lhs, rhs),
-            Self::Mul(dst, lhs, rhs) => write!(f, "{} <- {} * {}", dst, lhs, rhs),
-            Self::Div(dst, lhs, rhs) => write!(f, "{} <- {} / {}", dst, lhs, rhs),
-            Self::Mod(dst, lhs, rhs) => write!(f, "{} <- {} % {}", dst, lhs, rhs),
-            Self::AddF(dst, lhs, rhs) => write!(f, "{} <- {} +f {}", dst, lhs, rhs),
-            Self::SubF(dst, lhs, rhs) => write!(f, "{} <- {} -f {}", dst, lhs, rhs),
-            Self::MulF(dst, lhs, rhs) => write!(f, "{} <- {} *f {}", dst, lhs, rhs),
-            Self::DivF(dst, lhs, rhs) => write!(f, "{} <- {} /f {}", dst, lhs, rhs),
-            Self::Not(dst, src) => write!(f, "{} <- !{}", dst, src),
-            Self::Negative(dst, src) => write!(f, "{} <- -{}", dst, src),
-            Self::Load(dst, loc) => write!(f, "{} <- [{}]", dst, loc),
-            Self::Store(loc, src) => write!(f, "[{}] <- {}", loc, src),
-            Self::Func(dst, Some(module), func) => write!(f, "{} <- {}::{}", dst, module, func),
-            Self::Func(dst, None, func) => write!(f, "{} <- $self::{}", dst, func),
-            Self::Addr(dst, label) => write!(f, "{} <- &{}", dst, label),
-            Self::Call(dst, func, args) => {
-                write!(f, "{} <- call {}({})", dst, func, format_iter(args, ", "))
-            }
-            Self::CCall(dst, name, args) => {
-                write!(f, "{} <- ccall {}({})", dst, name, format_iter(args, ", "))
-            }
-            Self::Label(label) => write!(f, "{}:", label),
-            Self::JumpIf(cmp, lhs, rhs, dest) => {
-                write!(f, "jump {} if {} {} {}", dest, lhs, cmp, rhs)
-            }
-            Self::Jump(dest) => write!(f, "jump {}", dest),
-            Self::Return(src) => write!(f, "return {}", src),
-        }
-    }
+#[derive(Debug, Clone, PartialEq)]
+pub enum Stmt {
+    Expr(Temp, Expr),
+    Store(Expr, Expr),
+    Label(Label),
+    JumpIf(Cmp, Expr, Expr, Label),
+    Jump(Label),
+    Return(Expr),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub name: Id,
     pub params: Vec<Temp>,
-    pub body: Vec<Op>,
+    pub body: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -167,6 +134,125 @@ impl Module {
     }
 }
 
+pub fn dump_stmt(stmt: &Stmt, indent: usize) {
+    assert!(indent >= 1);
+
+    print_indent(indent);
+
+    match stmt {
+        Stmt::Expr(temp, expr) => {
+            print!("{} <- ", temp);
+            dump_expr(expr, indent);
+        }
+        Stmt::Label(label) => {
+            print!("\r");
+            print_indent(indent - 1);
+            print!("{}:", label);
+        }
+        Stmt::JumpIf(cmp, lhs, rhs, label) => {
+            print!("jump {} if ", label);
+            dump_expr(lhs, indent);
+            print!("{} ", cmp);
+            dump_expr(rhs, indent);
+        }
+        Stmt::Jump(label) => {
+            print!("jump {}", label);
+        }
+        Stmt::Return(expr) => {
+            print!("return ");
+            dump_expr(expr, indent);
+        }
+        _ => panic!(),
+    }
+}
+
+pub fn dump_expr(expr: &Expr, indent: usize) {
+    fn dump_binop(symbol: &str, lhs: &Expr, rhs: &Expr, indent: usize) {
+        dump_expr(lhs, indent);
+        print!(" {} ", symbol);
+        dump_expr(rhs, indent);
+    }
+
+    match expr {
+        Expr::Int(n) => print!("{}", n),
+        Expr::Float(n) => print!("{}", n),
+        Expr::Temp(temp) => print!("{}", temp),
+        Expr::Add(lhs, rhs) => dump_binop("+", lhs, rhs, indent),
+        Expr::Sub(lhs, rhs) => dump_binop("-", lhs, rhs, indent),
+        Expr::Mul(lhs, rhs) => dump_binop("*", lhs, rhs, indent),
+        Expr::Div(lhs, rhs) => dump_binop("/", lhs, rhs, indent),
+        Expr::Mod(lhs, rhs) => dump_binop("%", lhs, rhs, indent),
+        Expr::AddF(lhs, rhs) => dump_binop("f+", lhs, rhs, indent),
+        Expr::SubF(lhs, rhs) => dump_binop("f-", lhs, rhs, indent),
+        Expr::MulF(lhs, rhs) => dump_binop("f*", lhs, rhs, indent),
+        Expr::DivF(lhs, rhs) => dump_binop("f/", lhs, rhs, indent),
+        Expr::Not(expr) => {
+            print!("!(");
+            dump_expr(expr, indent);
+            print!(")")
+        }
+        Expr::Negative(expr) => {
+            print!("-(");
+            dump_expr(expr, indent);
+            print!(")")
+        }
+        Expr::Load(expr) => {
+            print!("[");
+            dump_expr(expr, indent);
+            print!("]");
+        }
+        Expr::Addr(label) => println!("&{}", label),
+        Expr::Func(None, func) => println!("self::{}", func),
+        Expr::Func(Some(module), func) => println!("{}::{}", module, func),
+        Expr::Call(func, args) => {
+            dump_expr(func, indent);
+            print!("(");
+
+            let mut iter = args.iter();
+            if let Some(arg) = iter.next() {
+                dump_expr(arg, indent);
+            }
+
+            for arg in iter {
+                print!(", ");
+                dump_expr(arg, indent);
+            }
+
+            print!(")");
+        }
+        Expr::CCall(func, args) => {
+            print!("*{}*(", func);
+
+            let mut iter = args.iter();
+            if let Some(arg) = iter.next() {
+                dump_expr(arg, indent);
+            }
+
+            for arg in iter {
+                print!(", ");
+                dump_expr(arg, indent);
+            }
+
+            print!(")");
+        }
+        Expr::Seq(stmts, result) => {
+            println!("{{");
+
+            for stmt in stmts {
+                dump_stmt(stmt, indent + 1);
+                println!(";");
+            }
+
+            print_indent(indent + 1);
+            dump_expr(result, indent + 1);
+
+            println!();
+            print_indent(indent);
+            print!("}}");
+        }
+    }
+}
+
 pub fn dump_module(module: &Module) {
     println!("module {}", module.path);
 
@@ -184,12 +270,8 @@ pub fn dump_module(module: &Module) {
 
     for (name, func) in &module.functions {
         println!("  {}({}):", name, format_iter(&func.params, ", "));
-        for op in &func.body {
-            if let Op::Label(..) = op {
-                println!("  {}", op);
-            } else {
-                println!("    {}", op);
-            }
-        }
+        print!("  ");
+        dump_expr(&func.body, 2);
+        println!();
     }
 }
