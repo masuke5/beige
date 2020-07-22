@@ -207,6 +207,8 @@ impl Lexer {
             }
         }
 
+        self.advance();
+
         Some(TokenKind::String(s))
     }
 
