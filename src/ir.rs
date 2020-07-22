@@ -274,19 +274,23 @@ pub fn dump_module(module: &Module) {
     println!("module {}", module.path);
 
     for (label, string) in &module.strings {
-        println!("  {}: \"{}\"", label, escape_str(string))
+        println!("  \x1b[94m{}\x1b[0m: \"{}\"", label, escape_str(string))
     }
 
     for (label, expr) in &module.constants {
-        print!("  {}: ", label,);
+        print!("  \x1b[94m{}\x1b[0m: ", label,);
         dump_expr(expr, 1);
         println!();
     }
 
     for (name, func) in &module.functions {
-        println!("  {}({}):", name, format_iter(&func.params, ", "));
-        print!("  ");
-        dump_expr(&func.body, 1);
+        println!(
+            "  \x1b[94m{}\x1b[0m({}): ",
+            name,
+            format_iter(&func.params, ", ")
+        );
+        print!("    ");
+        dump_expr(&func.body, 2);
         println!();
     }
 }

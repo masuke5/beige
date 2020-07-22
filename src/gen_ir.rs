@@ -33,7 +33,7 @@ impl Generator {
             stack_size: 0,
             funcs: FxHashMap::default(),
             scope_funcs: ScopeMap::new(),
-            prefix: String::new(),
+            prefix: String::from("--"),
         }
     }
 
@@ -279,6 +279,8 @@ impl Generator {
     fn gen_func(&mut self, func: TypedFunction) -> Function {
         self.push_scope();
 
+        self.prefix = format!("{}{}-", self.prefix, func.name);
+
         // Insert parameters as variables
         let mut params = Vec::new();
         for param_name in func.params {
@@ -290,6 +292,8 @@ impl Generator {
         let body = self.gen_expr(*func.body);
 
         self.pop_scope();
+        self.prefix
+            .truncate(self.prefix.len() - format!("{}", func.name).len() - 1);
 
         let func = Function {
             name: func.name,
@@ -312,6 +316,10 @@ impl Generator {
 
         for (_, (_, func)) in module.functions {
             let func = self.gen_func(func);
+            new_module.functions.insert(func.name, func);
+        }
+
+        for (_, func) in self.funcs {
             new_module.functions.insert(func.name, func);
         }
 
