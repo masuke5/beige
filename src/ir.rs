@@ -46,7 +46,7 @@ impl fmt::Display for Temp {
 
 impl fmt::Display for Label {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, ".L{}", self.raw())
+        write!(f, "L{}", self.raw())
     }
 }
 
@@ -77,7 +77,7 @@ impl fmt::Display for Cmp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Int(i64),
-    Float(i64),
+    Float(f64),
     Temp(Temp),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
@@ -96,6 +96,7 @@ pub enum Expr {
     Call(Box<Expr>, Vec<Expr>),
     CCall(Id, Vec<Expr>),
     Seq(Vec<Stmt>, Box<Expr>),
+    DSeq(Vec<Stmt>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -120,7 +121,7 @@ pub struct Module {
     pub path: Id,
     pub functions: FxHashMap<Id, Function>,
     pub strings: FxHashMap<Label, String>,
-    pub data: FxHashMap<Label, Vec<u8>>,
+    pub constants: FxHashMap<Label, Expr>,
 }
 
 impl Module {
@@ -129,7 +130,7 @@ impl Module {
             path,
             functions: FxHashMap::default(),
             strings: FxHashMap::default(),
-            data: FxHashMap::default(),
+            constants: FxHashMap::default(),
         }
     }
 }
@@ -144,6 +145,12 @@ pub fn dump_stmt(stmt: &Stmt, indent: usize) {
             print!("{} <- ", temp);
             dump_expr(expr, indent);
         }
+        Stmt::Store(dst, src) => {
+            print!("[");
+            dump_expr(dst, indent);
+            print!("] <- ");
+            dump_expr(src, indent);
+        }
         Stmt::Label(label) => {
             print!("\r");
             print_indent(indent - 1);
@@ -152,7 +159,7 @@ pub fn dump_stmt(stmt: &Stmt, indent: usize) {
         Stmt::JumpIf(cmp, lhs, rhs, label) => {
             print!("jump {} if ", label);
             dump_expr(lhs, indent);
-            print!("{} ", cmp);
+            print!(" {} ", cmp);
             dump_expr(rhs, indent);
         }
         Stmt::Jump(label) => {
@@ -162,7 +169,6 @@ pub fn dump_stmt(stmt: &Stmt, indent: usize) {
             print!("return ");
             dump_expr(expr, indent);
         }
-        _ => panic!(),
     }
 }
 
@@ -201,9 +207,9 @@ pub fn dump_expr(expr: &Expr, indent: usize) {
             dump_expr(expr, indent);
             print!("]");
         }
-        Expr::Addr(label) => println!("&{}", label),
-        Expr::Func(None, func) => println!("self::{}", func),
-        Expr::Func(Some(module), func) => println!("{}::{}", module, func),
+        Expr::Addr(label) => print!("&{}", label),
+        Expr::Func(None, func) => print!("self::{}", func),
+        Expr::Func(Some(module), func) => print!("{}::{}", module, func),
         Expr::Call(func, args) => {
             dump_expr(func, indent);
             print!("(");
@@ -240,13 +246,24 @@ pub fn dump_expr(expr: &Expr, indent: usize) {
 
             for stmt in stmts {
                 dump_stmt(stmt, indent + 1);
-                println!(";");
+                println!();
             }
 
             print_indent(indent + 1);
             dump_expr(result, indent + 1);
 
             println!();
+            print_indent(indent);
+            print!("}}");
+        }
+        Expr::DSeq(stmts) => {
+            println!("{{");
+
+            for stmt in stmts {
+                dump_stmt(stmt, indent + 1);
+                println!();
+            }
+
             print_indent(indent);
             print!("}}");
         }
@@ -260,18 +277,16 @@ pub fn dump_module(module: &Module) {
         println!("  {}: \"{}\"", label, escape_str(string))
     }
 
-    for (label, data) in &module.data {
-        println!(
-            "  {}: {}",
-            label,
-            format_iter(data.iter().map(|n| format!("{:02X}", n)), " ")
-        );
+    for (label, expr) in &module.constants {
+        print!("  {}: ", label,);
+        dump_expr(expr, 1);
+        println!();
     }
 
     for (name, func) in &module.functions {
         println!("  {}({}):", name, format_iter(&func.params, ", "));
         print!("  ");
-        dump_expr(&func.body, 2);
+        dump_expr(&func.body, 1);
         println!();
     }
 }

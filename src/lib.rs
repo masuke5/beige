@@ -112,9 +112,7 @@ pub fn compile(option: CompileOption) {
     let ir_module = gen_ir::gen_ir(typed_module.unwrap());
 
     if option.output == OutputType::IR {
-        if let Some(ir_module) = ir_module {
-            ir::dump_module(&ir_module);
-        }
+        ir::dump_module(&ir_module);
         return;
     }
 }
