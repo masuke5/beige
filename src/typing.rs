@@ -135,7 +135,7 @@ impl Typing {
                     }
                     BinOp::Equal | BinOp::NotEqual => {
                         try_unify!(self, metas, rhs, lhs.ty.clone());
-                        rhs.ty.clone()
+                        T::App(C::Bool, vec![])
                     }
                     BinOp::And | BinOp::Or => {
                         try_unify!(self, metas, lhs, T::App(C::Bool, vec![]));

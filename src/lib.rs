@@ -3,6 +3,7 @@
 #[macro_use]
 mod error;
 mod dump;
+mod graph;
 mod id;
 mod scope_map;
 mod span;
