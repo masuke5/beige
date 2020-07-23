@@ -1,3 +1,5 @@
+use std::mem;
+
 use rustc_hash::FxHashMap;
 
 use crate::ast::BinOp;
@@ -329,7 +331,93 @@ impl Generator {
     }
 }
 
+fn flatten_expr(expr: &mut IRExpr) {
+    type E = IRExpr;
+    type S = IRStmt;
+
+    fn flatten_stmt(stmts: &mut Vec<IRStmt>, stmt: &mut IRStmt, call: bool) {
+        match stmt {
+            S::Expr(_, expr) | S::Return(expr) => {
+                flatten(stmts, expr, call);
+            }
+            S::Store(dst, src) => {
+                flatten(stmts, dst, true);
+                flatten(stmts, src, call);
+            }
+            S::JumpIf(_, lhs, rhs, _) => {
+                flatten(stmts, lhs, true);
+                flatten(stmts, rhs, call);
+            }
+            _ => {}
+        }
+    }
+
+    fn flatten(stmts: &mut Vec<IRStmt>, expr: &mut IRExpr, call: bool) {
+        match expr {
+            E::Add(lhs, rhs)
+            | E::Sub(lhs, rhs)
+            | E::Mul(lhs, rhs)
+            | E::Div(lhs, rhs)
+            | E::Mod(lhs, rhs)
+            | E::AddF(lhs, rhs)
+            | E::SubF(lhs, rhs)
+            | E::MulF(lhs, rhs)
+            | E::DivF(lhs, rhs) => {
+                flatten(stmts, lhs, true);
+                flatten(stmts, rhs, call);
+            }
+            E::Not(expr) | E::Negative(expr) | E::Load(expr) => flatten(stmts, expr, call),
+            E::Call(func, args) if call => {
+                flatten(stmts, func, true);
+                for arg in args {
+                    flatten(stmts, arg, true);
+                }
+
+                let temp = Temp::new();
+                let expr = mem::replace(expr, E::Temp(temp));
+                stmts.push(S::Expr(temp, expr));
+            }
+            E::CCall(_, args) if call => {
+                for arg in args {
+                    flatten(stmts, arg, true);
+                }
+
+                let temp = Temp::new();
+                let expr = mem::replace(expr, E::Temp(temp));
+                stmts.push(S::Expr(temp, expr));
+            }
+            E::Seq(inner_stmts, inner_expr) => {
+                for mut stmt in inner_stmts.drain(..) {
+                    flatten_stmt(stmts, &mut stmt, false);
+                    stmts.push(stmt);
+                }
+
+                flatten(stmts, inner_expr, call);
+                *expr = mem::replace(inner_expr, E::Int(0));
+            }
+            E::DSeq(inner_stmts) => {
+                for mut stmt in inner_stmts.drain(..) {
+                    flatten_stmt(stmts, &mut stmt, false);
+                    stmts.push(stmt);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut stmts = Vec::new();
+    flatten(&mut stmts, expr, false);
+    *expr = IRExpr::Seq(stmts, box mem::replace(expr, IRExpr::Int(0)));
+}
+
 pub fn gen_ir(module: TypedModule) -> Module {
     let generator = Generator::new();
-    generator.gen(module)
+    let mut module = generator.gen(module);
+
+    // Flatten
+    for func in module.functions.values_mut() {
+        flatten_expr(&mut func.body)
+    }
+
+    module
 }
