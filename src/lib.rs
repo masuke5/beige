@@ -13,14 +13,17 @@ mod ir;
 mod token;
 mod ty;
 
+mod codegen;
 mod gen_ir;
 mod lexer;
 mod parser;
 mod typing;
+mod x64codegen;
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use codegen::CodeGen;
 use id::IdMap;
 
 const MAIN_MODULE_FILE: &str = "main.beige";
@@ -116,4 +119,10 @@ pub fn compile(option: CompileOption) {
         ir::dump_module(&ir_module);
         return;
     }
+
+    // Do code generation
+    let mut codegen = x64codegen::X64CodeGen {};
+    let module = codegen.codegen(ir_module);
+    let output = codegen.gen_all(module);
+    println!("{}", output);
 }
