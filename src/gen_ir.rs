@@ -4,7 +4,9 @@ use rustc_hash::FxHashMap;
 
 use crate::ast::BinOp;
 use crate::id::{Id, IdMap};
-use crate::ir::{Cmp, Expr as IRExpr, Function, Label, Module, Stmt as IRStmt, Temp, TEMP_FP};
+use crate::ir::{
+    BasicBlock, Cmp, Expr as IRExpr, Function, Label, Module, Stmt as IRStmt, Temp, TEMP_FP,
+};
 use crate::scope_map::ScopeMap;
 use crate::typing::{TypedExpr, TypedExprKind, TypedFunction, TypedModule};
 
@@ -291,16 +293,19 @@ impl Generator {
             params.push(temp);
         }
 
-        let body = self.gen_expr(*func.body);
+        let mut body = self.gen_expr(*func.body);
 
         self.pop_scope();
         self.prefix
             .truncate(self.prefix.len() - format!("{}", func.name).len() - 1);
 
+        flatten_expr(&mut body);
+        let bbs = generate_bb(body);
+
         let func = Function {
             name: func.name,
             params,
-            body,
+            bbs,
         };
 
         func
@@ -410,14 +415,49 @@ fn flatten_expr(expr: &mut IRExpr) {
     *expr = IRExpr::Seq(stmts, box mem::replace(expr, IRExpr::Int(0)));
 }
 
-pub fn gen_ir(module: TypedModule) -> Module {
-    let generator = Generator::new();
-    let mut module = generator.gen(module);
+pub fn generate_bb(expr: IRExpr) -> Vec<BasicBlock> {
+    let (stmts, result_expr) = match expr {
+        IRExpr::Seq(stmts, expr) => (stmts, expr),
+        _ => panic!("no flatten"),
+    };
 
-    // Flatten
-    for func in module.functions.values_mut() {
-        flatten_expr(&mut func.body)
+    let mut bbs = vec![BasicBlock::new(None)];
+
+    for stmt in stmts {
+        let is_head = bbs.len() == 1;
+
+        let last_bb = bbs.last_mut().unwrap();
+        if last_bb.label.is_none() && !is_head {
+            last_bb.label = Some(Label::new());
+        }
+
+        match stmt {
+            IRStmt::Label(label) => {
+                if last_bb.stmts.is_empty() {
+                    last_bb.label = Some(label);
+                } else {
+                    bbs.push(BasicBlock::new(Some(label)));
+                }
+            }
+            IRStmt::Jump(..) | IRStmt::JumpIf(..) => {
+                last_bb.stmts.push(stmt);
+                bbs.push(BasicBlock::new(None));
+            }
+            stmt => {
+                last_bb.stmts.push(stmt);
+            }
+        };
     }
 
-    module
+    bbs.last_mut()
+        .unwrap()
+        .stmts
+        .push(IRStmt::Return(*result_expr));
+
+    bbs
+}
+
+pub fn gen_ir(module: TypedModule) -> Module {
+    let generator = Generator::new();
+    generator.gen(module)
 }

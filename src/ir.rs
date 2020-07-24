@@ -113,7 +113,7 @@ pub enum Stmt {
 pub struct Function {
     pub name: Id,
     pub params: Vec<Temp>,
-    pub body: Expr,
+    pub bbs: Vec<BasicBlock>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,6 +131,21 @@ impl Module {
             functions: FxHashMap::default(),
             strings: FxHashMap::default(),
             constants: FxHashMap::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BasicBlock {
+    pub label: Option<Label>,
+    pub stmts: Vec<Stmt>,
+}
+
+impl BasicBlock {
+    pub fn new(label: Option<Label>) -> Self {
+        Self {
+            label,
+            stmts: Vec::new(),
         }
     }
 }
@@ -270,6 +285,23 @@ pub fn dump_expr(expr: &Expr, indent: usize) {
     }
 }
 
+pub fn dump_bbs(bbs: &[BasicBlock], indent: usize) {
+    for bb in bbs {
+        print_indent(indent);
+        println!(
+            "\x1b[95m{}\x1b[0m:",
+            bb.label
+                .map(|l| format!("{}", l))
+                .unwrap_or(String::from("None"))
+        );
+
+        for stmt in &bb.stmts {
+            dump_stmt(stmt, indent + 1);
+            println!();
+        }
+    }
+}
+
 pub fn dump_module(module: &Module) {
     println!("module {}", module.path);
 
@@ -289,8 +321,7 @@ pub fn dump_module(module: &Module) {
             name,
             format_iter(&func.params, ", ")
         );
-        print!("    ");
-        dump_expr(&func.body, 2);
+        dump_bbs(&func.bbs, 1);
         println!();
     }
 }
