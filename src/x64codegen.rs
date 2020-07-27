@@ -63,7 +63,7 @@ const REG8_NAMES: [&str; 16] = [
     "r13b", "r14b", "r15b",
 ];
 
-fn reg64_name(temp: Temp) -> Option<&'static str> {
+pub fn reg64_name(temp: Temp) -> Option<&'static str> {
     if let Some(i) = ALL_REGS.iter().position(|t| *t == temp) {
         Some(REG64_NAMES[i])
     } else {
@@ -71,11 +71,17 @@ fn reg64_name(temp: Temp) -> Option<&'static str> {
     }
 }
 
-pub struct X64CodeGen {}
+pub struct X64CodeGen {
+    next_label: Option<Label>,
+    epilogue_label: Option<Label>,
+}
 
 impl X64CodeGen {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            next_label: None,
+            epilogue_label: None,
+        }
     }
 
     fn gen_label(label: Label) -> Mnemonic {
@@ -87,6 +93,7 @@ impl X64CodeGen {
 
     fn gen_expr(&mut self, ms: &mut Vec<Mnemonic>, expr: Expr) -> Temp {
         match expr {
+            Expr::Temp(temp) if temp == *TEMP_FP => *RBP,
             Expr::Temp(temp) => temp,
             Expr::Int(n) => result(|dst| {
                 ms.push(Mnemonic::Op {
@@ -219,15 +226,18 @@ impl X64CodeGen {
                         panic!("more than 6 arguments are unsupported");
                     }
 
+                    let mut src = vec![*RBP, *RSP];
+
                     for (arg, reg) in args.into_iter().zip(ARG_REGS.iter()) {
                         let temp = self.gen_expr(ms, arg);
                         self.gen_stmt(ms, Stmt::Expr(*reg, Expr::Temp(temp)));
+                        src.push(*reg);
                     }
 
                     ms.push(Mnemonic::Op {
                         text: format!("call {}", func),
                         dst: CALL_DST.to_vec(),
-                        src: vec![],
+                        src,
                     });
 
                     self.gen_stmt(ms, Stmt::Expr(dst, Expr::Temp(*RAX)));
@@ -364,46 +374,118 @@ impl X64CodeGen {
                     }
                 }
 
-                ms.push(Mnemonic::Op {
+                let mut jump = vec![label];
+                if let Some(next_label) = self.next_label {
+                    jump.push(next_label);
+                }
+
+                ms.push(Mnemonic::Jump {
                     text: format!("{} {}", opcode, label_name(label)),
                     dst: vec![],
                     src: vec![],
+                    jump,
                 })
             }
-            Stmt::Jump(label) => ms.push(Mnemonic::Op {
+            Stmt::Jump(label) => ms.push(Mnemonic::Jump {
                 text: format!("jmp {}", label_name(label)),
                 dst: vec![],
                 src: vec![],
+                jump: vec![label],
             }),
             Stmt::Return(expr) => {
                 let expr = self.gen_expr(ms, expr);
                 self.gen_stmt(ms, Stmt::Expr(*RAX, Expr::Temp(expr)));
-                ms.push(Mnemonic::Op {
-                    text: "ret".to_string(),
-                    dst: vec![],
-                    src: vec![],
-                })
+                self.gen_stmt(ms, Stmt::Jump(self.epilogue_label.unwrap()));
             }
             Stmt::Label(..) => panic!("there is a label"),
         }
     }
 
+    fn gen_prologue(&mut self, ms: &mut Vec<Mnemonic>, params: Vec<Temp>) {
+        // Save callee save registers
+        for reg in &*CALLEE_SAVES {
+            ms.push(Mnemonic::Op {
+                text: "push $s0".to_string(),
+                dst: vec![],
+                src: vec![*reg],
+            })
+        }
+
+        // push rbp
+        // mov rbp, rsp
+        // sub rsp, stack_size
+
+        ms.push(Mnemonic::Op {
+            text: "push $s0".to_string(),
+            dst: vec![],
+            src: vec![*RBP],
+        });
+        self.gen_stmt(ms, Stmt::Expr(*RBP, Expr::Temp(*RSP)));
+        ms.push(Mnemonic::Op {
+            text: format!("sub $d0, {}", 32),
+            dst: vec![*RSP],
+            src: vec![],
+        });
+
+        for (param, reg) in params.into_iter().zip(ARG_REGS.iter()) {
+            self.gen_stmt(ms, Stmt::Expr(param, Expr::Temp(*reg)));
+        }
+    }
+
+    fn gen_epilogue(&mut self, ms: &mut Vec<Mnemonic>, epilogue_label: Label) {
+        ms.push(Self::gen_label(epilogue_label));
+
+        // mov rsp, rbp
+        // pop rbp
+
+        self.gen_stmt(ms, Stmt::Expr(*RSP, Expr::Temp(*RBP)));
+        ms.push(Mnemonic::Op {
+            text: "pop $d0".to_string(),
+            dst: vec![*RBP],
+            src: vec![],
+        });
+
+        // Restore callee save registers
+        for reg in CALLEE_SAVES.iter().rev() {
+            ms.push(Mnemonic::Op {
+                text: "pop $d0".to_string(),
+                dst: vec![*reg],
+                src: vec![],
+            })
+        }
+
+        let mut src = vec![*RAX, *RBP, *RSP];
+        src.extend(&*CALLEE_SAVES);
+
+        ms.push(Mnemonic::Op {
+            text: "ret".to_string(),
+            dst: vec![],
+            src,
+        });
+    }
+
     fn gen_func(&mut self, ir_func: IRFunction) -> Function {
         let mut mnemonics = Vec::new();
 
-        for (param, reg) in ir_func.params.into_iter().zip(ARG_REGS.iter()) {
-            self.gen_stmt(&mut mnemonics, Stmt::Expr(param, Expr::Temp(*reg)));
-        }
+        self.epilogue_label = Some(Label::new());
+        self.gen_prologue(&mut mnemonics, ir_func.params);
 
-        for bb in ir_func.bbs {
+        let labels: Vec<Option<Label>> = ir_func.bbs.iter().map(|bb| bb.label).collect();
+
+        for (i, bb) in ir_func.bbs.into_iter().enumerate() {
             if let Some(label) = bb.label {
                 mnemonics.push(Self::gen_label(label));
             }
+
+            self.next_label = *labels.get(i + 1).unwrap_or(&None);
 
             for stmt in bb.stmts {
                 self.gen_stmt(&mut mnemonics, stmt);
             }
         }
+
+        self.gen_epilogue(&mut mnemonics, self.epilogue_label.unwrap());
+        self.epilogue_label = None;
 
         Function {
             name: ir_func.name,

@@ -16,6 +16,7 @@ mod ty;
 mod codegen;
 mod gen_ir;
 mod lexer;
+mod liveness;
 mod parser;
 mod typing;
 mod x64codegen;
@@ -121,8 +122,10 @@ pub fn compile(option: CompileOption) {
     }
 
     // Do code generation
-    let mut codegen = x64codegen::X64CodeGen {};
+    let mut codegen = x64codegen::X64CodeGen::new();
     let module = codegen.codegen(ir_module);
-    let output = codegen.gen_all(module);
-    println!("{}", output);
+
+    for func in module.functions {
+        liveness::calc_igraph(func.mnemonics);
+    }
 }

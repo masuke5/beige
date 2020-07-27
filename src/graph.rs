@@ -1,85 +1,90 @@
-use std::cell::{Ref, RefCell};
-use std::marker::PhantomData;
-use typed_arena::Arena;
+use itertools::Itertools;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::fmt;
+use std::hash::Hash;
 
-pub trait Node<T> {
-    fn new(value: T) -> Self;
+pub struct Node<T: Eq + Hash + Clone> {
+    pred: FxHashSet<T>,
+    succ: FxHashSet<T>,
 }
 
-pub struct DirectedNode<'a, T> {
-    value: T,
-    pred: RefCell<Vec<&'a DirectedNode<'a, T>>>,
-    succ: RefCell<Vec<&'a DirectedNode<'a, T>>>,
-}
-
-impl<'a, T> DirectedNode<'a, T> {
-    pub fn add_to(&'a mut self, node: &'a mut DirectedNode<'a, T>) {
-        self.succ.borrow_mut().push(node);
-        node.pred.borrow_mut().push(self);
-    }
-
-    pub fn pred(&'a self) -> Ref<'a, Vec<&'a DirectedNode<'a, T>>> {
-        self.pred.borrow()
-    }
-
-    pub fn succ(&'a self) -> Ref<'a, Vec<&'a DirectedNode<'a, T>>> {
-        self.succ.borrow()
-    }
-}
-
-impl<'a, T> Node<T> for DirectedNode<'a, T> {
-    fn new(value: T) -> Self {
-        Self {
-            value,
-            pred: RefCell::new(vec![]),
-            succ: RefCell::new(vec![]),
-        }
-    }
-}
-
-pub struct UndirectedNode<'a, T> {
-    value: T,
-    adjacent: RefCell<Vec<&'a UndirectedNode<'a, T>>>,
-}
-
-impl<'a, T> UndirectedNode<'a, T> {
-    pub fn add_to(&'a mut self, node: &'a mut UndirectedNode<'a, T>) {
-        self.adjacent.borrow_mut().push(node);
-        node.adjacent.borrow_mut().push(self);
-    }
-
-    pub fn adjacent(&'a self) -> Ref<'a, Vec<&'a UndirectedNode<'a, T>>> {
-        self.adjacent.borrow()
-    }
-}
-
-impl<'a, T> Node<T> for UndirectedNode<'a, T> {
-    fn new(value: T) -> Self {
-        Self {
-            value,
-            adjacent: RefCell::new(vec![]),
-        }
-    }
-}
-
-pub type DirectedGraph<'a, T> = Graph<'a, T, DirectedNode<'a, T>>;
-pub type UndirectedGraph<'a, T> = Graph<'a, T, UndirectedNode<'a, T>>;
-
-pub struct Graph<'a, T, N: Node<T>> {
-    arena: Arena<N>,
-    _phantom: &'a PhantomData<T>,
-}
-
-impl<'a, T, N: Node<T>> Graph<'a, T, N> {
+impl<T: Eq + Hash + Clone> Node<T> {
     pub fn new() -> Self {
         Self {
-            arena: Arena::new(),
-            _phantom: &PhantomData,
+            pred: FxHashSet::default(),
+            succ: FxHashSet::default(),
+        }
+    }
+}
+
+pub struct Graph<T: Eq + Hash + Clone> {
+    nodes: FxHashMap<T, Node<T>>,
+}
+
+impl<T: Eq + Hash + Clone> Graph<T> {
+    pub fn new() -> Self {
+        Self {
+            nodes: FxHashMap::default(),
         }
     }
 
-    pub fn insert(&'a mut self, value: T) -> &'a N {
-        let node = self.arena.alloc(Node::new(value));
-        node
+    pub fn insert(&mut self, value: T) {
+        self.nodes.insert(value, Node::new());
+    }
+
+    pub fn contains(&self, value: &T) -> bool {
+        self.nodes.contains_key(value)
+    }
+
+    pub fn add_edge(&mut self, from: &T, to: &T) {
+        if from == to {
+            return;
+        }
+
+        self.nodes.get_mut(from).unwrap().succ.insert(to.clone());
+        self.nodes.get_mut(to).unwrap().pred.insert(from.clone());
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {
+        self.nodes.keys()
+    }
+
+    pub fn pred(&self, key: &T) -> impl Iterator<Item = &T> + '_ {
+        self.nodes[key].pred.iter()
+    }
+
+    pub fn succ(&self, key: &T) -> impl Iterator<Item = &T> + '_ {
+        self.nodes[key].succ.iter()
+    }
+
+    pub fn adjacent(&self, key: &T) -> impl Iterator<Item = &T> + '_ {
+        self.nodes[key]
+            .pred
+            .iter()
+            .chain(self.nodes[key].succ.iter())
+            .unique()
+    }
+
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+}
+
+impl<T: fmt::Debug + Eq + Hash + Clone> fmt::Debug for Graph<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Graph {{\n")?;
+        for (value, node) in &self.nodes {
+            write!(f, "  {:?}\n", value)?;
+
+            for pred in &node.pred {
+                write!(f, "  <== {:?}\n", pred)?;
+            }
+
+            for succ in &node.succ {
+                write!(f, "  ==> {:?}\n", succ)?;
+            }
+        }
+
+        write!(f, "}}")
     }
 }

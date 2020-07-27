@@ -8,6 +8,12 @@ pub enum Mnemonic {
         dst: Vec<Temp>,
         src: Vec<Temp>,
     },
+    Jump {
+        text: String,
+        dst: Vec<Temp>,
+        src: Vec<Temp>,
+        jump: Vec<Label>,
+    },
     Label {
         text: String,
         label: Label,
@@ -39,7 +45,7 @@ pub trait CodeGen {
 
 pub fn format_mnemonic(mnemonic: &Mnemonic, mut get_name: impl FnMut(Temp) -> String) -> String {
     match mnemonic {
-        Mnemonic::Op { text, dst, src } => {
+        Mnemonic::Op { text, dst, src } | Mnemonic::Jump { text, dst, src, .. } => {
             let mut result = text.to_string();
             for (i, temp) in dst.iter().enumerate() {
                 result = result.replace(&format!("$d{}", i), &get_name(*temp));
@@ -105,6 +111,12 @@ mod tests {
                 dst: vec![r4],
                 src: vec![r2, r3],
             },
+            Mnemonic::Jump {
+                text: "jump .L10000 if $s0 = 0".to_string(),
+                dst: vec![],
+                src: vec![r4],
+                jump: vec![label],
+            },
         ];
 
         let mut assembly = String::new();
@@ -117,6 +129,7 @@ mod tests {
         expected += &format!(".L10000:\n");
         expected += r#"mov r3, r1
 add r4, r2, r3
+jump .L10000 if r4 = 0
 "#;
 
         assert_eq!(expected, assembly);
