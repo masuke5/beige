@@ -43,7 +43,7 @@ lazy_static! {
     // rax (return value), rbp, rsp + ARG_REGS + CALLER_SAVES
     static ref CALL_DST: [Temp; 11] =
         [*RAX, *RBP, *RSP, *RDI, *RSI, *RDX, *RCX, *R8, *R9, *R10, *R11];
-    static ref ALL_REGS: [Temp; 16] = [*RAX, *RBX, *RCX,*RDX, *RBP, *RSP, *RDI, *RSI, *R8, *R9, *R10, *R11, *R12, *R13, *R14, *R15];
+    pub static ref ALL_REGS: [Temp; 16] = [*RAX, *RBX, *RCX,*RDX, *RBP, *RSP, *RDI, *RSI, *R8, *R9, *R10, *R11, *R12, *R13, *R14, *R15];
 }
 
 const REG64_NAMES: [&str; 16] = [
@@ -518,7 +518,7 @@ impl CodeGen for X64CodeGen {
 
         for (label, s) in module.strings {
             out += &format!("{}:\n", label_name(label));
-            out += &format!("  db \"{}\", 0\n", escape_str(&s));
+            out += &format!("    db \"{}\", 0\n", escape_str(&s));
         }
 
         // Code
@@ -526,10 +526,11 @@ impl CodeGen for X64CodeGen {
         out += "section text\n";
 
         for func in module.functions {
+            out += &format!("global {}\n", func.name);
             out += &format!("{}:\n", func.name);
             for mnemonic in func.mnemonics {
                 out += &format!(
-                    "  {}\n",
+                    "    {}\n",
                     format_mnemonic(&mnemonic, |t| reg64_name(t)
                         .map(String::from)
                         .unwrap_or_else(|| format!("{}", t)))

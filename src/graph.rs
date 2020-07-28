@@ -19,17 +19,29 @@ impl<T: Eq + Hash + Clone> Node<T> {
 
 pub struct Graph<T: Eq + Hash + Clone> {
     nodes: FxHashMap<T, Node<T>>,
+    undirected_edges: FxHashSet<(T, T)>,
 }
 
 impl<T: Eq + Hash + Clone> Graph<T> {
     pub fn new() -> Self {
         Self {
             nodes: FxHashMap::default(),
+            undirected_edges: FxHashSet::default(),
         }
     }
 
     pub fn insert(&mut self, value: T) {
         self.nodes.insert(value, Node::new());
+    }
+
+    pub fn remove(&mut self, value: T) {
+        for pred in self.nodes[&value].pred.clone() {
+            self.nodes.get_mut(&pred).unwrap().succ.remove(&value);
+        }
+        for succ in self.nodes[&value].succ.clone() {
+            self.nodes.get_mut(&succ).unwrap().pred.remove(&value);
+        }
+        self.nodes.remove(&value);
     }
 
     pub fn contains(&self, value: &T) -> bool {
@@ -43,6 +55,14 @@ impl<T: Eq + Hash + Clone> Graph<T> {
 
         self.nodes.get_mut(from).unwrap().succ.insert(to.clone());
         self.nodes.get_mut(to).unwrap().pred.insert(from.clone());
+
+        if !self.undirected_edges.contains(&(to.clone(), from.clone())) {
+            self.undirected_edges.insert((from.clone(), to.clone()));
+        }
+    }
+
+    pub fn undirected_edges(&self) -> impl Iterator<Item = &(T, T)> {
+        self.undirected_edges.iter()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {

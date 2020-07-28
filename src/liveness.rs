@@ -4,14 +4,16 @@ use crate::ir::{Label, Temp};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::hash::Hash;
 
+pub type InterferenceGraph = Graph<Temp>;
+
 fn hs<T: Clone + Hash + Eq>(values: &[T]) -> FxHashSet<T> {
     values.iter().cloned().collect()
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Liveness {
-    ins: FxHashSet<Temp>,
-    outs: FxHashSet<Temp>,
+    pub ins: FxHashSet<Temp>,
+    pub outs: FxHashSet<Temp>,
 }
 
 impl Liveness {
@@ -25,8 +27,8 @@ impl Liveness {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct BasicBlock {
-    label: Option<Label>,
-    mnemonics: Vec<Mnemonic>,
+    pub label: Option<Label>,
+    pub mnemonics: Vec<Mnemonic>,
 }
 
 impl BasicBlock {
@@ -164,7 +166,7 @@ fn gen_liveness(bbs: &[BasicBlock], graph: &Graph<usize>) -> Vec<Vec<Liveness>> 
 }
 
 // interference graph
-pub fn calc_igraph(mnemonics: Vec<Mnemonic>) -> Graph<Temp> {
+pub fn calc_igraph(mnemonics: Vec<Mnemonic>) -> (Vec<BasicBlock>, InterferenceGraph) {
     let bbs = generate_bb(mnemonics);
 
     let graph = gen_dataflow(&bbs);
@@ -210,9 +212,9 @@ pub fn calc_igraph(mnemonics: Vec<Mnemonic>) -> Graph<Temp> {
         }
     }
 
-    dump_igraph(&bbs, &livenesses, &igraph);
+    // dump_igraph(&bbs, &livenesses, &igraph);
 
-    igraph
+    (bbs, igraph)
 }
 
 #[allow(dead_code)]
@@ -225,7 +227,7 @@ fn dump_igraph(bbs: &[BasicBlock], livenesses: &Vec<Vec<Liveness>>, igraph: &Gra
     // Return x64 register name if possible
     let temp_name = |temp| {
         reg64_name(temp)
-            .map(String::from)
+            .map(|t| format!("{}*{}", t, temp))
             .unwrap_or_else(|| format!("{}", temp))
     };
 

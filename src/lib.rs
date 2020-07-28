@@ -14,10 +14,12 @@ mod token;
 mod ty;
 
 mod codegen;
+mod color;
 mod gen_ir;
 mod lexer;
 mod liveness;
 mod parser;
+mod regalloc;
 mod typing;
 mod x64codegen;
 
@@ -121,11 +123,19 @@ pub fn compile(option: CompileOption) {
         return;
     }
 
-    // Do code generation
+    // Select instructions
     let mut codegen = x64codegen::X64CodeGen::new();
-    let module = codegen.codegen(ir_module);
+    let mut module = codegen.codegen(ir_module);
 
+    // Register allocation
+    let mut functions = Vec::with_capacity(module.functions.len());
     for func in module.functions {
-        liveness::calc_igraph(func.mnemonics);
+        functions.push(regalloc::regalloc(func));
     }
+
+    module.functions = functions;
+
+    // Generate code
+    let code = codegen.gen_all(module);
+    println!("{}", code);
 }
