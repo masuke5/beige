@@ -34,14 +34,14 @@ impl<T: Eq + Hash + Clone> Graph<T> {
         self.nodes.insert(value, Node::new());
     }
 
-    pub fn remove(&mut self, value: T) {
-        for pred in self.nodes[&value].pred.clone() {
+    pub fn remove(&mut self, value: &T) {
+        for pred in self.nodes[value].pred.clone() {
             self.nodes.get_mut(&pred).unwrap().succ.remove(&value);
         }
-        for succ in self.nodes[&value].succ.clone() {
+        for succ in self.nodes[value].succ.clone() {
             self.nodes.get_mut(&succ).unwrap().pred.remove(&value);
         }
-        self.nodes.remove(&value);
+        self.nodes.remove(value);
     }
 
     pub fn contains(&self, value: &T) -> bool {

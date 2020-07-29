@@ -12,6 +12,95 @@ pub enum ColorResult {
     Completed(FxHashMap<Temp, Temp>),
 }
 
+struct WorkGraph {
+    degrees: FxHashMap<Temp, usize>,
+    adjacents: FxHashMap<Temp, FxHashSet<Temp>>,
+    aliases: FxHashMap<Temp, Temp>,
+}
+
+impl WorkGraph {
+    fn new() -> Self {
+        Self {
+            degrees: FxHashMap::default(),
+            adjacents: FxHashMap::default(),
+            aliases: FxHashMap::default(),
+        }
+    }
+
+    fn from_graph(graph: Graph<Temp>) -> Self {
+        // Initialize degree map
+        let mut degrees = FxHashMap::default();
+        for temp in graph.iter() {
+            let degree = graph.adjacent(temp).count();
+            degrees.insert(*temp, degree);
+        }
+
+        // Initialize adjacent map
+        let mut adjacents = FxHashMap::default();
+        for temp in graph.iter() {
+            let adjacent = graph.adjacent(temp).copied().collect();
+            adjacents.insert(*temp, adjacent);
+        }
+
+        Self {
+            degrees,
+            adjacents,
+            aliases: FxHashMap::default(),
+        }
+    }
+
+    fn alias(&self, temp: Temp) -> Temp {
+        self.aliases.get(&temp).copied().unwrap_or(temp)
+    }
+
+    fn adjacent(&self, temp: Temp) -> impl Iterator<Item = Temp> + '_ {
+        self.adjacents[&self.alias(temp)].iter().copied()
+    }
+
+    fn degree(&self, temp: Temp) -> usize {
+        self.degrees[&self.alias(temp)]
+    }
+
+    fn remove(&mut self, temp: Temp) {
+        let temp = self.alias(temp);
+
+        for adj in self.adjacents.remove(&temp).unwrap() {
+            self.adjacents.get_mut(&adj).unwrap().remove(&temp);
+            *self.degrees.get_mut(&adj).unwrap() -= 1;
+        }
+
+        self.degrees.remove(&temp);
+    }
+
+    fn coalesce(&mut self, a: Temp, b: Temp) {
+        let a = self.alias(a);
+        let b = self.alias(b);
+
+        if a == b {
+            return;
+        }
+
+        if self.adjacents.get_mut(&a).unwrap().remove(&b) {
+            *self.degrees.get_mut(&a).unwrap() -= 1;
+        }
+        self.adjacents.get_mut(&b).unwrap().remove(&a);
+
+        for adj in self.adjacent(b).collect::<Vec<_>>() {
+            if self.adjacents.get_mut(&a).unwrap().insert(adj) {
+                *self.degrees.get_mut(&a).unwrap() += 1;
+            } else {
+                *self.degrees.get_mut(&adj).unwrap() -= 1;
+            }
+
+            self.adjacents.get_mut(&adj).unwrap().remove(&b);
+        }
+
+        self.adjacents.remove(&b);
+        self.degrees.remove(&b);
+        self.aliases.insert(b, a);
+    }
+}
+
 struct Color {
     igraph: InterferenceGraph,
     move_graph: Graph<Temp>,
@@ -187,4 +276,246 @@ pub fn color(
 
     let color = Color::new(igraph, registers, move_graph);
     color.color()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_workgraph_from_graph() {
+        let a = Temp::new();
+        let b = Temp::new();
+        let c = Temp::new();
+        let d = Temp::new();
+
+        let mut graph = Graph::new();
+        graph.insert(a);
+        graph.insert(b);
+        graph.insert(c);
+        graph.insert(d);
+        graph.add_edge(&a, &c);
+        graph.add_edge(&a, &b);
+        graph.add_edge(&a, &d);
+        graph.add_edge(&d, &c);
+
+        let graph = WorkGraph::from_graph(graph);
+
+        let adjacent: Vec<_> = graph.adjacent(c).collect();
+        assert_eq!(2, adjacent.len());
+        assert!(adjacent.contains(&a));
+        assert!(adjacent.contains(&d));
+
+        assert_eq!(3, graph.degree(a));
+        assert_eq!(2, graph.degree(d));
+    }
+
+    #[test]
+    fn test_workgraph_remove() {
+        let a = Temp::new();
+        let b = Temp::new();
+        let c = Temp::new();
+        let d = Temp::new();
+
+        let mut graph = Graph::new();
+        graph.insert(a);
+        graph.insert(b);
+        graph.insert(c);
+        graph.insert(d);
+        graph.add_edge(&a, &c);
+        graph.add_edge(&a, &b);
+        graph.add_edge(&a, &d);
+        graph.add_edge(&d, &c);
+
+        let mut graph = WorkGraph::from_graph(graph);
+
+        graph.remove(d);
+
+        let adjacent: Vec<_> = graph.adjacent(a).collect();
+        assert_eq!(2, adjacent.len());
+        assert!(adjacent.contains(&b));
+        assert!(adjacent.contains(&c));
+
+        assert_eq!(2, graph.degree(a));
+        assert_eq!(1, graph.degree(c));
+    }
+
+    //   / b
+    // a
+    //   \ d
+    #[test]
+    fn test_workgraph_coalesce1() {
+        let a = Temp::new();
+        let b = Temp::new();
+        let c = Temp::new();
+        let d = Temp::new();
+
+        let mut graph = Graph::new();
+        graph.insert(a);
+        graph.insert(b);
+        graph.insert(c);
+        graph.insert(d);
+        graph.add_edge(&a, &c);
+        graph.add_edge(&a, &b);
+        graph.add_edge(&a, &d);
+        graph.add_edge(&d, &c);
+
+        let mut graph = WorkGraph::from_graph(graph);
+
+        graph.coalesce(b, d);
+
+        let adjacent: Vec<_> = graph.adjacent(b).collect();
+        let adjacent_d: Vec<_> = graph.adjacent(d).collect();
+        assert_eq!(2, adjacent.len());
+        assert_eq!(adjacent, adjacent_d);
+        assert!(adjacent.contains(&a));
+        assert!(adjacent.contains(&c));
+
+        assert_eq!(2, graph.degree(a));
+        assert_eq!(2, graph.degree(b));
+        assert_eq!(2, graph.degree(c));
+
+        graph.remove(b);
+
+        let adjacent: Vec<_> = graph.adjacent(a).collect();
+        assert_eq!(1, adjacent.len());
+        assert!(adjacent.contains(&c));
+
+        assert_eq!(1, graph.degree(a));
+        assert_eq!(1, graph.degree(c));
+    }
+
+    //   / b
+    // a   |
+    //   \ d
+    #[test]
+    fn test_workgraph_coalesce2() {
+        let a = Temp::new();
+        let b = Temp::new();
+        let c = Temp::new();
+        let d = Temp::new();
+
+        let mut graph = Graph::new();
+        graph.insert(a);
+        graph.insert(b);
+        graph.insert(c);
+        graph.insert(d);
+        graph.add_edge(&a, &c);
+        graph.add_edge(&a, &b);
+        graph.add_edge(&a, &d);
+        graph.add_edge(&d, &c);
+        graph.add_edge(&b, &d);
+
+        let mut graph = WorkGraph::from_graph(graph);
+
+        graph.coalesce(b, d);
+
+        let adjacent: Vec<_> = graph.adjacent(b).collect();
+        let adjacent_d: Vec<_> = graph.adjacent(d).collect();
+        assert_eq!(2, adjacent.len());
+        assert_eq!(adjacent, adjacent_d);
+        assert!(adjacent.contains(&a));
+        assert!(adjacent.contains(&c));
+
+        assert_eq!(2, graph.degree(a));
+        assert_eq!(2, graph.degree(b));
+        assert_eq!(2, graph.degree(c));
+
+        graph.remove(b);
+
+        let adjacent: Vec<_> = graph.adjacent(a).collect();
+        assert_eq!(1, adjacent.len());
+        assert!(adjacent.contains(&c));
+
+        assert_eq!(1, graph.degree(a));
+        assert_eq!(1, graph.degree(c));
+    }
+
+    //     b
+    // a
+    //   \ d
+    #[test]
+    fn test_workgraph_coalesce3() {
+        let a = Temp::new();
+        let b = Temp::new();
+        let c = Temp::new();
+        let d = Temp::new();
+
+        let mut graph = Graph::new();
+        graph.insert(a);
+        graph.insert(b);
+        graph.insert(c);
+        graph.insert(d);
+        graph.add_edge(&a, &c);
+        graph.add_edge(&a, &d);
+        graph.add_edge(&d, &c);
+
+        let mut graph = WorkGraph::from_graph(graph);
+
+        graph.coalesce(b, d);
+
+        let adjacent: Vec<_> = graph.adjacent(b).collect();
+        let adjacent_d: Vec<_> = graph.adjacent(d).collect();
+        assert_eq!(2, adjacent.len());
+        assert_eq!(adjacent, adjacent_d);
+        assert!(adjacent.contains(&a));
+        assert!(adjacent.contains(&c));
+
+        assert_eq!(2, graph.degree(a));
+        assert_eq!(2, graph.degree(b));
+        assert_eq!(2, graph.degree(c));
+
+        graph.remove(b);
+
+        let adjacent: Vec<_> = graph.adjacent(a).collect();
+        assert_eq!(1, adjacent.len());
+        assert!(adjacent.contains(&c));
+
+        assert_eq!(1, graph.degree(a));
+        assert_eq!(1, graph.degree(c));
+    }
+
+    //   / b
+    // a
+    //     d
+    #[test]
+    fn test_workgraph_coalesce4() {
+        let a = Temp::new();
+        let b = Temp::new();
+        let c = Temp::new();
+        let d = Temp::new();
+
+        let mut graph = Graph::new();
+        graph.insert(a);
+        graph.insert(b);
+        graph.insert(c);
+        graph.insert(d);
+        graph.add_edge(&a, &c);
+        graph.add_edge(&a, &b);
+        graph.add_edge(&d, &c);
+
+        let mut graph = WorkGraph::from_graph(graph);
+
+        graph.coalesce(b, d);
+
+        let adjacent: Vec<_> = graph.adjacent(b).collect();
+        let adjacent_d: Vec<_> = graph.adjacent(d).collect();
+        assert_eq!(2, adjacent.len());
+        assert_eq!(adjacent, adjacent_d);
+        assert!(adjacent.contains(&a));
+        assert!(adjacent.contains(&c));
+
+        assert_eq!(2, graph.degree(a));
+        assert_eq!(2, graph.degree(b));
+        assert_eq!(2, graph.degree(c));
+
+        graph.remove(b);
+
+        let adjacent: Vec<_> = graph.adjacent(a).collect();
+        assert_eq!(1, adjacent.len());
+        assert!(adjacent.contains(&c));
+
+        assert_eq!(1, graph.degree(a));
+        assert_eq!(1, graph.degree(c));
+    }
 }
