@@ -227,7 +227,7 @@ fn dump_igraph(bbs: &[BasicBlock], livenesses: &Vec<Vec<Liveness>>, igraph: &Gra
     // Return x64 register name if possible
     let temp_name = |temp| {
         reg64_name(temp)
-            .map(|t| format!("{}*{}", t, temp))
+            .map(|t| format!("{}", t))
             .unwrap_or_else(|| format!("{}", temp))
     };
 

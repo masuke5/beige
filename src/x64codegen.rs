@@ -402,15 +402,6 @@ impl X64CodeGen {
     }
 
     fn gen_prologue(&mut self, ms: &mut Vec<Mnemonic>, params: Vec<Temp>) {
-        // Save callee save registers
-        for reg in &*CALLEE_SAVES {
-            ms.push(Mnemonic::Op {
-                text: "push $s0".to_string(),
-                dst: vec![],
-                src: vec![*reg],
-            })
-        }
-
         // push rbp
         // mov rbp, rsp
         // sub rsp, stack_size
@@ -444,15 +435,6 @@ impl X64CodeGen {
             dst: vec![*RBP],
             src: vec![],
         });
-
-        // Restore callee save registers
-        for reg in CALLEE_SAVES.iter().rev() {
-            ms.push(Mnemonic::Op {
-                text: "pop $d0".to_string(),
-                dst: vec![*reg],
-                src: vec![],
-            })
-        }
 
         let mut src = vec![*RAX, *RBP, *RSP];
         src.extend(&*CALLEE_SAVES);
