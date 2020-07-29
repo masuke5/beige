@@ -297,7 +297,7 @@ impl Generator {
 
         self.pop_scope();
         self.prefix
-            .truncate(self.prefix.len() - format!("{}", func.name).len() - 1);
+            .truncate(self.prefix.len() - format!("{}", func.name).len() - 3);
 
         flatten_expr(&mut body);
         let bbs = generate_bb(body);
