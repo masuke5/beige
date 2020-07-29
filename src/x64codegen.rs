@@ -283,10 +283,10 @@ impl X64CodeGen {
             }
             Stmt::Expr(dst, expr) => {
                 let expr = self.gen_expr(ms, expr);
-                ms.push(Mnemonic::Op {
+                ms.push(Mnemonic::Move {
                     text: "mov $d0, $s0".to_string(),
-                    dst: vec![dst],
-                    src: vec![expr],
+                    dst,
+                    src: expr,
                 });
             }
             Stmt::Store(Expr::Sub(box Expr::Temp(fp), box Expr::Int(loc)), expr)

@@ -33,6 +33,16 @@ fn rewrite(bbs: Vec<BasicBlock>, map: &FxHashMap<Temp, Temp>) -> Vec<Mnemonic> {
     mnemonics
 }
 
+fn remove_redundant_moves(mnemonics: Vec<Mnemonic>) -> Vec<Mnemonic> {
+    mnemonics
+        .into_iter()
+        .filter(|mnemonic| match mnemonic {
+            Mnemonic::Move { src, dst, .. } if *src == *dst => false,
+            _ => true,
+        })
+        .collect()
+}
+
 pub fn regalloc(mut func: Function) -> Function {
     let (bbs, igraph) = liveness::calc_igraph(func.mnemonics);
     let result = color(&bbs, igraph, x64codegen::ALL_REGS.iter().copied().collect());
@@ -41,6 +51,7 @@ pub fn regalloc(mut func: Function) -> Function {
         ColorResult::Spilled(..) => panic!("spilled"),
         ColorResult::Completed(map) => {
             func.mnemonics = rewrite(bbs, &map);
+            func.mnemonics = remove_redundant_moves(func.mnemonics);
             func
         }
     }

@@ -17,7 +17,8 @@ impl FromStr for OutputTypeFromStr {
             "ast" => OutputType::AST,
             "ast2" => OutputType::TypedAST,
             "ir" => OutputType::IR,
-            "asm" => OutputType::Assembly,
+            "asm" => OutputType::Assembly1,
+            "asm2" => OutputType::Assembly2,
             "obj" => OutputType::ObjectFiles,
             s => return Err(format!("unknown dump type: `{}`", s)),
         };

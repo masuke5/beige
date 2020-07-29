@@ -38,7 +38,8 @@ pub enum OutputType {
     AST,
     TypedAST,
     IR,
-    Assembly,
+    Assembly1,
+    Assembly2,
     ObjectFiles,
     Binary,
 }
@@ -54,7 +55,7 @@ impl CompileOption {
     pub fn new(directory: impl AsRef<Path>, out_dir: impl AsRef<Path>) -> Self {
         Self {
             directory: directory.as_ref().to_path_buf(),
-            output: OutputType::Assembly,
+            output: OutputType::Binary,
             out_dir: out_dir.as_ref().to_path_buf(),
         }
     }
@@ -214,6 +215,11 @@ pub fn compile(option: CompileOption) {
     let mut codegen = x64codegen::X64CodeGen::new();
     let mut module = codegen.codegen(ir_module);
 
+    if option.output == OutputType::Assembly1 {
+        println!("{}", codegen.gen_all(module));
+        return;
+    }
+
     // Register allocation
     let mut functions = Vec::with_capacity(module.functions.len());
     for func in module.functions {
@@ -224,7 +230,7 @@ pub fn compile(option: CompileOption) {
 
     // Generate code
     let code = codegen.gen_all(module);
-    if option.output == OutputType::Assembly {
+    if option.output == OutputType::Assembly2 {
         println!("{}", code);
         return;
     }
