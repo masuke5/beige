@@ -53,6 +53,14 @@ impl WorkGraph {
         self.aliases.get(&temp).copied().unwrap_or(temp)
     }
 
+    fn iter(&self) -> impl Iterator<Item = Temp> + '_ {
+        self.adjacents.keys().copied()
+    }
+
+    fn len(&self) -> usize {
+        self.adjacents.len()
+    }
+
     fn adjacent(&self, temp: Temp) -> impl Iterator<Item = Temp> + '_ {
         self.adjacents[&self.alias(temp)].iter().copied()
     }
@@ -103,9 +111,9 @@ impl WorkGraph {
 
 struct Color {
     igraph: InterferenceGraph,
+    graph: WorkGraph,
     move_graph: Graph<Temp>,
     simplified_temps: Vec<Temp>,
-    removed_temps: FxHashSet<Temp>,
     registers: FxHashSet<Temp>,
     colored_temps: FxHashMap<Temp, Temp>,
     spilled_temps: Vec<Temp>,
@@ -114,18 +122,14 @@ struct Color {
 impl Color {
     fn new(igraph: InterferenceGraph, registers: FxHashSet<Temp>, move_graph: Graph<Temp>) -> Self {
         Self {
+            graph: WorkGraph::from_graph(igraph.clone()),
             igraph,
             move_graph,
             simplified_temps: Vec::new(),
-            removed_temps: FxHashSet::default(),
             spilled_temps: Vec::new(),
             colored_temps: FxHashMap::default(),
             registers,
         }
-    }
-
-    fn degree(&self, temp: Temp) -> usize {
-        self.adjacent(temp).count()
     }
 
     fn is_precolored(&self, temp: Temp) -> bool {
@@ -133,7 +137,7 @@ impl Color {
     }
 
     fn is_significant_degree(&self, temp: Temp) -> bool {
-        self.degree(temp) >= self.registers.len()
+        self.graph.degree(temp) >= self.registers.len()
     }
 
     fn is_interference(&self, a: Temp, b: Temp) -> bool {
@@ -149,24 +153,16 @@ impl Color {
     }
 
     fn adjacent(&self, temp: Temp) -> impl Iterator<Item = Temp> + '_ {
-        self.igraph
-            .adjacent(&temp)
-            .copied()
-            .filter(move |t| !self.removed_temps.contains(&t))
+        self.graph.adjacent(temp)
     }
 
     fn simplify(&mut self) {
         // Find simplification target
-        let temp = self
-            .igraph
-            .iter()
-            .filter(|t| !self.removed_temps.contains(*t))
-            .find(|temp| {
-                !self.is_precolored(**temp)
-                    && !self.is_significant_degree(**temp)
-                    && !self.is_move_related(**temp)
-            })
-            .copied();
+        let temp = self.graph.iter().find(|temp| {
+            !self.is_precolored(*temp)
+                && !self.is_significant_degree(*temp)
+                && !self.is_move_related(*temp)
+        });
         let temp = match temp {
             Some(t) => t,
             // If a target is not found, do nothing
@@ -174,7 +170,7 @@ impl Color {
         };
 
         self.simplified_temps.push(temp);
-        self.removed_temps.insert(temp);
+        self.graph.remove(temp);
     }
 
     fn coalesce(&mut self) {
@@ -210,11 +206,11 @@ impl Color {
     }
 
     fn is_completed(&self) -> bool {
-        self.igraph
+        self.graph
             .iter()
-            .filter(|t| !self.is_precolored(**t))
+            .filter(|t| !self.is_precolored(*t))
             .count()
-            == self.removed_temps.len()
+            == 0
     }
 
     fn color(mut self) -> ColorResult {
@@ -242,7 +238,6 @@ impl Color {
         println!("##########################");
 
         println!("Simplified: {}", format_iter(&self.simplified_temps, ","));
-        println!("Removed: {}", format_iter(&self.removed_temps, ","));
 
         println!("----------------");
 

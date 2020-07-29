@@ -3,6 +3,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::fmt;
 use std::hash::Hash;
 
+#[derive(PartialEq, Clone)]
 pub struct Node<T: Eq + Hash + Clone> {
     pred: FxHashSet<T>,
     succ: FxHashSet<T>,
@@ -17,6 +18,7 @@ impl<T: Eq + Hash + Clone> Node<T> {
     }
 }
 
+#[derive(PartialEq, Clone)]
 pub struct Graph<T: Eq + Hash + Clone> {
     nodes: FxHashMap<T, Node<T>>,
     undirected_edges: FxHashSet<(T, T)>,
