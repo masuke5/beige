@@ -1,6 +1,6 @@
 use crate::codegen::{Function, Mnemonic};
 use crate::color::{color, ColorResult};
-use crate::ir::Temp;
+use crate::ir::{Label, Temp};
 use crate::liveness::{self, BasicBlock};
 use crate::x64codegen;
 use rustc_hash::FxHashMap;
@@ -8,8 +8,19 @@ use rustc_hash::FxHashMap;
 fn rewrite(bbs: Vec<BasicBlock>, map: &FxHashMap<Temp, Temp>) -> Vec<Mnemonic> {
     let mut mnemonics = Vec::new();
 
-    for bb in bbs {
-        for mut mnemonic in bb.mnemonics {
+    let labels: Vec<Option<Label>> = bbs.iter().map(|bb| bb.label).collect();
+
+    for (i, bb) in bbs.into_iter().enumerate() {
+        let mut iter = bb.mnemonics.into_iter();
+
+        // Remove redundant label
+        match iter.next() {
+            Some(Mnemonic::Label { .. }) if bb.label_is_redundant => {}
+            Some(mnemonic) => mnemonics.push(mnemonic),
+            None => {}
+        };
+
+        for mut mnemonic in iter {
             match &mut mnemonic {
                 Mnemonic::Op { src, dst, .. } | Mnemonic::Jump { src, dst, .. } => {
                     for src in src {
@@ -24,6 +35,15 @@ fn rewrite(bbs: Vec<BasicBlock>, map: &FxHashMap<Temp, Temp>) -> Vec<Mnemonic> {
                     *dst = *map.get(dst).unwrap_or(dst);
                 }
                 _ => {}
+            }
+
+            // Remove redundant jump
+            if let Mnemonic::Jump { jump, .. } = &mnemonic {
+                if let Some(Some(label)) = labels.get(i + 1) {
+                    if jump.len() == 1 && jump[0] == *label {
+                        continue;
+                    }
+                }
             }
 
             mnemonics.push(mnemonic);

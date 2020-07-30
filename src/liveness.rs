@@ -29,26 +29,28 @@ impl Liveness {
 pub struct BasicBlock {
     pub label: Option<Label>,
     pub mnemonics: Vec<Mnemonic>,
+    pub label_is_redundant: bool,
 }
 
 impl BasicBlock {
-    pub fn new(label: Option<Label>) -> Self {
+    pub fn new(label: Option<Label>, label_is_redundant: bool) -> Self {
         Self {
             label,
             mnemonics: Vec::new(),
+            label_is_redundant,
         }
     }
 }
 
 fn generate_bb(mnemonics: Vec<Mnemonic>) -> Vec<BasicBlock> {
-    let mut bbs = vec![BasicBlock::new(None)];
+    let mut bbs = vec![BasicBlock::new(None, false)];
 
     for mnemonic in mnemonics {
         let last_bb = bbs.last_mut().unwrap();
 
         match mnemonic {
             Mnemonic::Label { label, .. } => {
-                bbs.push(BasicBlock::new(Some(label)));
+                bbs.push(BasicBlock::new(Some(label), false));
                 bbs.last_mut().unwrap().mnemonics.push(mnemonic);
             }
             mnemonic => last_bb.mnemonics.push(mnemonic),
@@ -167,9 +169,17 @@ fn gen_liveness(bbs: &[BasicBlock], graph: &Graph<usize>) -> Vec<Vec<Liveness>> 
 
 // interference graph
 pub fn calc_igraph(mnemonics: Vec<Mnemonic>) -> (Vec<BasicBlock>, InterferenceGraph) {
-    let bbs = generate_bb(mnemonics);
+    let mut bbs = generate_bb(mnemonics);
 
     let graph = gen_dataflow(&bbs);
+
+    // Find redundant label
+    for (i, bb) in bbs.iter_mut().enumerate() {
+        let pred: Vec<_> = graph.pred(&i).collect();
+        if pred.len() == 1 && i > 0 && *pred[0] == i - 1 {
+            bb.label_is_redundant = true;
+        }
+    }
 
     let livenesses = gen_liveness(&bbs, &graph);
 

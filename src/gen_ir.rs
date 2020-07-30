@@ -68,11 +68,9 @@ impl Generator {
     }
 
     fn alloc_var(&mut self, name: Id) -> usize {
-        let loc = self.stack_size;
-        self.vars.insert(name, Variable::Local(loc));
-
-        self.stack_size += 1;
-        loc
+        self.stack_size += 8;
+        self.vars.insert(name, Variable::Local(self.stack_size));
+        self.stack_size
     }
 
     fn gen_record(&mut self, exprs: impl Iterator<Item = TypedExpr>, len: usize) -> IRExpr {
@@ -88,7 +86,7 @@ impl Generator {
         for (i, expr) in exprs.map(|e| self.gen_expr(e)).enumerate() {
             // [addr + i] <- expr
             stmts.push(IS::Store(
-                IE::Add(box IE::Temp(addr), box IE::Int(i as i64 + 1)),
+                IE::Add(box IE::Temp(addr), box IE::Int(i as i64)),
                 expr,
             ));
         }
@@ -127,7 +125,7 @@ impl Generator {
                 match self.vars.get(&name).unwrap() {
                     Variable::Local(loc) => IE::Load(box IE::Sub(
                         box IE::Temp(*TEMP_FP),
-                        box IE::Int(*loc as i64 + 1),
+                        box IE::Int(*loc as i64),
                     )),
                     Variable::Param(temp) => IE::Temp(*temp),
                 }
@@ -180,7 +178,7 @@ impl Generator {
                 let expr = self.gen_expr(*expr);
                 let loc = self.alloc_var(name);
                 IE::DSeq(vec![IS::Store(
-                    IE::Sub(box IE::Temp(*TEMP_FP), box IE::Int(loc as i64 + 1)),
+                    IE::Sub(box IE::Temp(*TEMP_FP), box IE::Int(loc as i64)),
                     expr,
                 )])
             }
