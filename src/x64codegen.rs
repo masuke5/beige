@@ -46,6 +46,8 @@ lazy_static! {
     pub static ref ALL_REGS: [Temp; 16] = [*RAX, *RBX, *RCX,*RDX, *RBP, *RSP, *RDI, *RSI, *R8, *R9, *R10, *R11, *R12, *R13, *R14, *R15];
 }
 
+pub const REG_PRIORITY: [u32; 16] = [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+
 const REG64_NAMES: [&str; 16] = [
     "rax", "rbx", "rcx", "rdx", "rbp", "rsp", "rdi", "rsi", "r8", "r9", "r10", "r11", "r12", "r13",
     "r14", "r15",

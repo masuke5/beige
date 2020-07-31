@@ -4,6 +4,7 @@ use crate::ir::Temp;
 use crate::liveness::{BasicBlock, InterferenceGraph};
 use log::debug;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::cmp::Reverse;
 
 // TODO: 効率の良い実装
 
@@ -273,12 +274,18 @@ struct Color {
     move_graph: Graph<Temp>,
     simplified_temps: Vec<Temp>,
     registers: FxHashSet<Temp>,
+    register_priority: FxHashMap<Temp, u32>,
     colored_temps: FxHashMap<Temp, Temp>,
     spilled_temps: Vec<Temp>,
 }
 
 impl Color {
-    fn new(igraph: InterferenceGraph, registers: FxHashSet<Temp>, move_graph: Graph<Temp>) -> Self {
+    fn new(
+        igraph: InterferenceGraph,
+        registers: FxHashSet<Temp>,
+        move_graph: Graph<Temp>,
+        register_priority: FxHashMap<Temp, u32>,
+    ) -> Self {
         Self {
             graph: WorkGraph::from_graph(igraph.clone(), move_graph.clone()),
             igraph,
@@ -287,6 +294,7 @@ impl Color {
             spilled_temps: Vec::new(),
             colored_temps: FxHashMap::default(),
             registers,
+            register_priority,
         }
     }
 
@@ -376,6 +384,9 @@ impl Color {
                 }
             }
 
+            let mut ok_regs: Vec<Temp> = ok_regs.into_iter().collect();
+            ok_regs.sort_by_key(|t| Reverse(self.register_priority[t]));
+
             if let Some(reg) = ok_regs.iter().next() {
                 self.colored_temps.insert(temp, *reg);
             } else {
@@ -452,6 +463,7 @@ pub fn color(
     bbs: &[BasicBlock],
     igraph: InterferenceGraph,
     registers: FxHashSet<Temp>,
+    register_priority: FxHashMap<Temp, u32>,
 ) -> ColorResult {
     let mut move_graph = Graph::new();
     for bb in bbs {
@@ -467,7 +479,7 @@ pub fn color(
         }
     }
 
-    let color = Color::new(igraph, registers, move_graph);
+    let color = Color::new(igraph, registers, move_graph, register_priority);
     color.color()
 }
 
