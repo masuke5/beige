@@ -43,6 +43,14 @@ pub trait CodeGen {
     fn gen_all(&mut self, module: Module) -> String;
 }
 
+pub fn reg_name(temp: Temp) -> String {
+    use crate::x64codegen::reg64_name as x64reg;
+
+    x64reg(temp)
+        .map(String::from)
+        .unwrap_or_else(|| format!("{}", temp))
+}
+
 pub fn format_mnemonic(mnemonic: &Mnemonic, mut get_name: impl FnMut(Temp) -> String) -> String {
     match mnemonic {
         Mnemonic::Op { text, dst, src } | Mnemonic::Jump { text, dst, src, .. } => {

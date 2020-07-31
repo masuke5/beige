@@ -23,12 +23,12 @@ mod regalloc;
 mod typing;
 mod x64codegen;
 
+use codegen::CodeGen;
+use id::IdMap;
+use log::debug;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-
-use codegen::CodeGen;
-use id::IdMap;
 
 const MAIN_MODULE_FILE: &str = "main.beige";
 
@@ -149,6 +149,8 @@ fn link(obj_files: &[PathBuf], out_path: &Path) {
 }
 
 pub fn compile(option: CompileOption) {
+    env_logger::init();
+
     let dump_option = ast::DumpOption {
         show_type: true,
         show_span: true,
@@ -166,6 +168,7 @@ pub fn compile(option: CompileOption) {
     };
 
     // Lex
+    debug!("Lex `{}`", file);
     let tokens = lexer::lex(file, &code);
 
     if option.output == OutputType::Token {
@@ -176,6 +179,7 @@ pub fn compile(option: CompileOption) {
     }
 
     // Parse
+    debug!("Parse `{}`", file);
     let module = parser::parse(tokens, file);
 
     if option.output == OutputType::AST {
@@ -190,6 +194,7 @@ pub fn compile(option: CompileOption) {
     }
 
     // Type
+    debug!("Infer type `{}`", file);
     let typed_module = typing::infer_module(module.unwrap());
 
     if option.output == OutputType::TypedAST {
@@ -204,6 +209,7 @@ pub fn compile(option: CompileOption) {
     }
 
     // Generate IR
+    debug!("Generate IR `{}`", file);
     let ir_module = gen_ir::gen_ir(typed_module.unwrap());
 
     if option.output == OutputType::IR {
@@ -212,6 +218,7 @@ pub fn compile(option: CompileOption) {
     }
 
     // Select instructions
+    debug!("Select instructions `{}`", file);
     let mut codegen = x64codegen::X64CodeGen::new();
     let mut module = codegen.codegen(ir_module);
 
@@ -221,6 +228,7 @@ pub fn compile(option: CompileOption) {
     }
 
     // Register allocation
+    debug!("Alloc registers `{}`", file);
     let mut functions = Vec::with_capacity(module.functions.len());
     for func in module.functions {
         functions.push(regalloc::regalloc(func));
@@ -229,6 +237,7 @@ pub fn compile(option: CompileOption) {
     module.functions = functions;
 
     // Generate code
+    debug!("Generate code `{}`", file);
     let code = codegen.gen_all(module);
     if option.output == OutputType::Assembly2 {
         println!("{}", code);
@@ -236,6 +245,7 @@ pub fn compile(option: CompileOption) {
     }
 
     // Assemble
+    debug!("Assemble `{}`", file);
     fs::create_dir_all(&option.out_dir).unwrap();
 
     let mut out_path = option.out_dir.join(main_file.file_name().unwrap());
@@ -256,6 +266,7 @@ pub fn compile(option: CompileOption) {
     }
 
     // Link
+    debug!("Link");
     let binary_path = option.out_dir.join("main");
     link(&obj_files, &binary_path);
 }

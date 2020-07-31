@@ -1,7 +1,8 @@
-use crate::codegen::Mnemonic;
+use crate::codegen::{reg_name, Mnemonic};
 use crate::graph::Graph;
 use crate::ir::Temp;
 use crate::liveness::{BasicBlock, InterferenceGraph};
+use log::debug;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 // TODO: 効率の良い実装
@@ -16,18 +17,13 @@ struct WorkGraph {
     degrees: FxHashMap<Temp, usize>,
     adjacents: FxHashMap<Temp, FxHashSet<Temp>>,
     aliases: FxHashMap<Temp, Temp>,
+    coalesced_temps: FxHashMap<Temp, FxHashSet<Temp>>,
+    move_adjacents: FxHashMap<Temp, FxHashSet<Temp>>,
+    moves: FxHashSet<(Temp, Temp)>,
 }
 
 impl WorkGraph {
-    fn new() -> Self {
-        Self {
-            degrees: FxHashMap::default(),
-            adjacents: FxHashMap::default(),
-            aliases: FxHashMap::default(),
-        }
-    }
-
-    fn from_graph(graph: Graph<Temp>) -> Self {
+    fn from_graph(graph: Graph<Temp>, move_graph: Graph<Temp>) -> Self {
         // Initialize degree map
         let mut degrees = FxHashMap::default();
         for temp in graph.iter() {
@@ -42,11 +38,34 @@ impl WorkGraph {
             adjacents.insert(*temp, adjacent);
         }
 
-        Self {
+        let mut move_adjacents = FxHashMap::default();
+        for temp in move_graph.iter() {
+            let adjacent = move_graph.adjacent(temp).copied().collect();
+            move_adjacents.insert(*temp, adjacent);
+        }
+
+        let mut graph = Self {
             degrees,
             adjacents,
             aliases: FxHashMap::default(),
+            move_adjacents,
+            moves: FxHashSet::default(),
+            coalesced_temps: FxHashMap::default(),
+        };
+
+        for temp in graph.iter().collect::<Vec<_>>() {
+            if graph.is_move_related(temp) {
+                for adj in graph.move_adjacent(temp).collect::<Vec<_>>() {
+                    graph.add_move_edge(temp, adj);
+                }
+            }
         }
+
+        for temp in graph.adjacents.keys() {
+            graph.coalesced_temps.insert(*temp, FxHashSet::default());
+        }
+
+        graph
     }
 
     fn alias(&self, temp: Temp) -> Temp {
@@ -69,6 +88,10 @@ impl WorkGraph {
         self.degrees[&self.alias(temp)]
     }
 
+    fn coalesced_temps(&self, temp: Temp) -> impl Iterator<Item = Temp> + '_ {
+        self.coalesced_temps[&self.alias(temp)].iter().copied()
+    }
+
     fn remove(&mut self, temp: Temp) {
         let temp = self.alias(temp);
 
@@ -78,6 +101,29 @@ impl WorkGraph {
         }
 
         self.degrees.remove(&temp);
+
+        if let Some(adj) = self.move_adjacents.remove(&temp) {
+            for adj in adj {
+                self.remove_move_edge(adj, temp);
+            }
+        }
+    }
+
+    fn add_edge(&mut self, a: Temp, b: Temp) {
+        let a = self.alias(a);
+        let b = self.alias(b);
+
+        if a == b {
+            return;
+        }
+
+        if self.adjacents.get_mut(&a).unwrap().insert(b) {
+            *self.degrees.get_mut(&a).unwrap() += 1;
+        }
+
+        if self.adjacents.get_mut(&b).unwrap().insert(a) {
+            *self.degrees.get_mut(&b).unwrap() += 1;
+        }
     }
 
     fn coalesce(&mut self, a: Temp, b: Temp) {
@@ -88,24 +134,136 @@ impl WorkGraph {
             return;
         }
 
-        if self.adjacents.get_mut(&a).unwrap().remove(&b) {
-            *self.degrees.get_mut(&a).unwrap() -= 1;
-        }
-        self.adjacents.get_mut(&b).unwrap().remove(&a);
-
         for adj in self.adjacent(b).collect::<Vec<_>>() {
-            if self.adjacents.get_mut(&a).unwrap().insert(adj) {
-                *self.degrees.get_mut(&a).unwrap() += 1;
-            } else {
-                *self.degrees.get_mut(&adj).unwrap() -= 1;
+            self.add_edge(a, adj);
+        }
+
+        if self.is_move_related(b) {
+            for adj in self.move_adjacent(b).collect::<Vec<_>>() {
+                self.add_move_edge(a, adj);
+            }
+        }
+
+        self.remove(b);
+
+        // aliases
+        // c --> b
+        // ↓
+        // b --> a
+        // c --> a
+
+        self.aliases.insert(b, a);
+
+        let b_coalesced_temps = self.coalesced_temps[&b].clone();
+        for b_coalesced in &b_coalesced_temps {
+            self.aliases.insert(*b_coalesced, a);
+        }
+
+        // coalesced_temps
+        // b --> [c]
+        // ↓
+        // a --> [b, c]
+        // b --> []
+
+        self.coalesced_temps.get_mut(&a).unwrap().insert(b);
+        self.coalesced_temps.get_mut(&b).unwrap().clear();
+
+        for b_coalesced in &b_coalesced_temps {
+            self.coalesced_temps
+                .get_mut(&a)
+                .unwrap()
+                .insert(*b_coalesced);
+        }
+    }
+
+    fn dump(&self) {
+        use crate::dump::format_iter;
+
+        for temp in self.iter() {
+            print!(
+                "{: <7} adj:{} degree:{} coalesced:{}",
+                format!("{}", reg_name(temp)),
+                format_iter(self.adjacent(temp).map(reg_name).collect::<Vec<_>>(), ","),
+                self.degree(temp),
+                format_iter(
+                    self.coalesced_temps(temp).map(reg_name).collect::<Vec<_>>(),
+                    ","
+                ),
+            );
+
+            if self.is_move_related(temp) {
+                print!(
+                    " move_adj:{}",
+                    format_iter(
+                        self.move_adjacent(temp).map(reg_name).collect::<Vec<_>>(),
+                        ","
+                    )
+                )
             }
 
-            self.adjacents.get_mut(&adj).unwrap().remove(&b);
+            println!();
         }
 
-        self.adjacents.remove(&b);
-        self.degrees.remove(&b);
-        self.aliases.insert(b, a);
+        println!("Moves:");
+        for (a, b) in self.move_edges() {
+            println!("  {}, {}", reg_name(a), reg_name(b));
+        }
+
+        println!("Aliases:");
+        for (a, b) in &self.aliases {
+            println!("  {} --> {}", reg_name(*a), reg_name(*b));
+        }
+    }
+}
+
+impl WorkGraph {
+    fn is_move_related(&self, temp: Temp) -> bool {
+        let temp = self.alias(temp);
+        if let Some(adj) = self.move_adjacents.get(&temp) {
+            !adj.is_empty()
+        } else {
+            false
+        }
+    }
+
+    fn move_adjacent(&self, temp: Temp) -> impl Iterator<Item = Temp> + '_ {
+        let temp = self.alias(temp);
+        self.move_adjacents[&temp].iter().copied()
+    }
+
+    fn move_edges(&self) -> impl Iterator<Item = (Temp, Temp)> + '_ {
+        self.moves.iter().copied()
+    }
+
+    fn add_move_edge(&mut self, a: Temp, b: Temp) {
+        let a = self.alias(a);
+        let b = self.alias(b);
+
+        if a == b {
+            return;
+        }
+
+        self.move_adjacents.entry(a).or_default().insert(b);
+        self.move_adjacents.entry(b).or_default().insert(a);
+
+        if !self.moves.contains(&(a, b)) && !self.moves.contains(&(b, a)) {
+            self.moves.insert((a, b));
+        }
+    }
+
+    fn remove_move_edge(&mut self, a: Temp, b: Temp) {
+        if a == b {
+            return;
+        }
+
+        if let Some(adj) = self.move_adjacents.get_mut(&a) {
+            adj.remove(&b);
+        }
+        if let Some(adj) = self.move_adjacents.get_mut(&b) {
+            adj.remove(&a);
+        }
+        self.moves.remove(&(a, b));
+        self.moves.remove(&(b, a));
     }
 }
 
@@ -122,7 +280,7 @@ struct Color {
 impl Color {
     fn new(igraph: InterferenceGraph, registers: FxHashSet<Temp>, move_graph: Graph<Temp>) -> Self {
         Self {
-            graph: WorkGraph::from_graph(igraph.clone()),
+            graph: WorkGraph::from_graph(igraph.clone(), move_graph.clone()),
             igraph,
             move_graph,
             simplified_temps: Vec::new(),
@@ -141,19 +299,22 @@ impl Color {
     }
 
     fn is_interference(&self, a: Temp, b: Temp) -> bool {
-        self.adjacent(a).find(|t| *t == b).is_some()
+        self.graph.adjacent(a).find(|t| *t == b).is_some()
     }
 
-    fn is_move_related(&self, temp: Temp) -> bool {
-        if !self.move_graph.contains(&temp) {
-            false
-        } else {
-            self.move_graph.adjacent(&temp).count() == 0
-        }
-    }
+    fn can_coalesce(&self, a: Temp, b: Temp) -> bool {
+        assert!(!self.is_precolored(a) || !self.is_precolored(b));
 
-    fn adjacent(&self, temp: Temp) -> impl Iterator<Item = Temp> + '_ {
-        self.graph.adjacent(temp)
+        let ab_adj: FxHashSet<_> = self
+            .graph
+            .adjacent(a)
+            .chain(self.graph.adjacent(b))
+            .collect();
+        ab_adj
+            .into_iter()
+            .filter(|adj| self.is_significant_degree(*adj))
+            .count()
+            < self.registers.len()
     }
 
     fn simplify(&mut self) {
@@ -161,7 +322,7 @@ impl Color {
         let temp = self.graph.iter().find(|temp| {
             !self.is_precolored(*temp)
                 && !self.is_significant_degree(*temp)
-                && !self.is_move_related(*temp)
+                && !self.graph.is_move_related(*temp)
         });
         let temp = match temp {
             Some(t) => t,
@@ -174,7 +335,25 @@ impl Color {
     }
 
     fn coalesce(&mut self) {
-        unimplemented!()
+        let (x, y) = match self
+            .graph
+            .move_edges()
+            .filter(|(a, b)| !self.is_precolored(*a) || !self.is_precolored(*b))
+            .next()
+        {
+            Some(m) => m,
+            None => return,
+        };
+
+        if self.can_coalesce(x, y) {
+            debug!("Coalesce {} and {}", reg_name(x), reg_name(y));
+
+            if self.is_precolored(y) {
+                self.graph.coalesce(y, x);
+            } else {
+                self.graph.coalesce(x, y);
+            }
+        }
     }
 
     fn freeze(&mut self) {
@@ -203,6 +382,25 @@ impl Color {
                 self.spilled_temps.push(temp);
             }
         }
+
+        for temp in self.graph.iter() {
+            assert!(self.is_precolored(temp));
+
+            for coalesced in self.graph.coalesced_temps(temp) {
+                self.colored_temps.insert(coalesced, temp);
+            }
+        }
+
+        for (temp, reg) in self
+            .colored_temps
+            .iter()
+            .map(|(t, r)| (*t, *r))
+            .collect::<Vec<_>>()
+        {
+            for coalesced in self.graph.coalesced_temps(temp) {
+                self.colored_temps.insert(coalesced, reg);
+            }
+        }
     }
 
     fn is_completed(&self) -> bool {
@@ -217,7 +415,7 @@ impl Color {
         while !self.is_completed() {
             // self.dump();
             self.simplify();
-            // self.coalesce();
+            self.coalesce();
             // self.freeze();
             // self.select_spill();
         }
@@ -276,6 +474,16 @@ pub fn color(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+    use std::hash::Hash;
+
+    fn hs<T: Eq + Hash + Clone>(values: &[T]) -> HashSet<T> {
+        let mut hs = HashSet::new();
+        for value in values {
+            hs.insert(value.clone());
+        }
+        hs
+    }
 
     #[test]
     fn test_workgraph_from_graph() {
@@ -294,7 +502,7 @@ mod tests {
         graph.add_edge(&a, &d);
         graph.add_edge(&d, &c);
 
-        let graph = WorkGraph::from_graph(graph);
+        let graph = WorkGraph::from_graph(graph, Graph::new());
 
         let adjacent: Vec<_> = graph.adjacent(c).collect();
         assert_eq!(2, adjacent.len());
@@ -322,7 +530,7 @@ mod tests {
         graph.add_edge(&a, &d);
         graph.add_edge(&d, &c);
 
-        let mut graph = WorkGraph::from_graph(graph);
+        let mut graph = WorkGraph::from_graph(graph, Graph::new());
 
         graph.remove(d);
 
@@ -355,7 +563,7 @@ mod tests {
         graph.add_edge(&a, &d);
         graph.add_edge(&d, &c);
 
-        let mut graph = WorkGraph::from_graph(graph);
+        let mut graph = WorkGraph::from_graph(graph, Graph::new());
 
         graph.coalesce(b, d);
 
@@ -401,7 +609,7 @@ mod tests {
         graph.add_edge(&d, &c);
         graph.add_edge(&b, &d);
 
-        let mut graph = WorkGraph::from_graph(graph);
+        let mut graph = WorkGraph::from_graph(graph, Graph::new());
 
         graph.coalesce(b, d);
 
@@ -445,7 +653,7 @@ mod tests {
         graph.add_edge(&a, &d);
         graph.add_edge(&d, &c);
 
-        let mut graph = WorkGraph::from_graph(graph);
+        let mut graph = WorkGraph::from_graph(graph, Graph::new());
 
         graph.coalesce(b, d);
 
@@ -489,7 +697,7 @@ mod tests {
         graph.add_edge(&a, &b);
         graph.add_edge(&d, &c);
 
-        let mut graph = WorkGraph::from_graph(graph);
+        let mut graph = WorkGraph::from_graph(graph, Graph::new());
 
         graph.coalesce(b, d);
 
@@ -512,5 +720,70 @@ mod tests {
 
         assert_eq!(1, graph.degree(a));
         assert_eq!(1, graph.degree(c));
+    }
+
+    //   / b
+    // a   | (move)
+    //     d
+    #[test]
+    fn test_workgraph_coalesce_with_move_graph() {
+        let a = Temp::new();
+        let b = Temp::new();
+        let c = Temp::new();
+        let d = Temp::new();
+
+        let mut graph = Graph::new();
+        graph.insert(a);
+        graph.insert(b);
+        graph.insert(c);
+        graph.insert(d);
+        graph.add_edge(&a, &c);
+        graph.add_edge(&a, &b);
+        graph.add_edge(&d, &c);
+
+        let mut mgraph = Graph::new();
+        mgraph.insert(b);
+        mgraph.insert(d);
+        mgraph.add_edge(&b, &d);
+
+        let mut graph = WorkGraph::from_graph(graph, mgraph);
+
+        assert!(graph.is_move_related(b));
+        assert_eq!(hs(&[d]), graph.move_adjacent(b).collect::<HashSet<_>>());
+        assert_eq!(hs(&[(b, d)]), graph.move_edges().collect::<HashSet<_>>());
+
+        graph.coalesce(b, d);
+
+        assert!(!graph.is_move_related(b));
+        assert!(graph.move_adjacent(b).collect::<Vec<_>>().is_empty());
+        assert!(graph.move_edges().next().is_none());
+    }
+
+    //   / b      / bc
+    // a   |  → a       → abc
+    //     c
+    #[test]
+    fn test_workgraph_coalesce5() {
+        let a = Temp::new();
+        let b = Temp::new();
+        let c = Temp::new();
+
+        let mut graph = Graph::new();
+        graph.insert(a);
+        graph.insert(b);
+        graph.insert(c);
+        graph.add_edge(&a, &b);
+        graph.add_edge(&b, &c);
+
+        let mut graph = WorkGraph::from_graph(graph, Graph::new());
+
+        graph.coalesce(b, c);
+        graph.coalesce(a, b);
+
+        assert_eq!(
+            hs(&[b, c]),
+            graph.coalesced_temps(a).collect::<HashSet<_>>()
+        );
+        assert_eq!(a, graph.alias(c));
     }
 }
