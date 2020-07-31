@@ -21,7 +21,7 @@ struct Generator {
     constants: FxHashMap<Id, Label>,
     strings: FxHashMap<Label, String>,
     vars: ScopeMap<Id, Variable>,
-    stack_size: usize,
+    stack_sizes: Vec<usize>,
 
     funcs: FxHashMap<Id, Function>,
     scope_funcs: ScopeMap<Id, Id>,
@@ -34,7 +34,7 @@ impl Generator {
             constants: FxHashMap::default(),
             strings: FxHashMap::default(),
             vars: ScopeMap::new(),
-            stack_size: 0,
+            stack_sizes: Vec::new(),
             funcs: FxHashMap::default(),
             scope_funcs: ScopeMap::new(),
             prefix: String::from("___"),
@@ -44,11 +44,13 @@ impl Generator {
     fn push_scope(&mut self) {
         self.vars.push_scope();
         self.scope_funcs.push_scope();
+        self.stack_sizes.push(0);
     }
 
     fn pop_scope(&mut self) {
         self.vars.pop_scope();
         self.scope_funcs.pop_scope();
+        self.stack_sizes.pop();
     }
 
     fn find_func_in_scope(&self, name: Id) -> Option<&Function> {
@@ -68,9 +70,10 @@ impl Generator {
     }
 
     fn alloc_var(&mut self, name: Id) -> usize {
-        self.stack_size += 8;
-        self.vars.insert(name, Variable::Local(self.stack_size));
-        self.stack_size
+        let stack_size = self.stack_sizes.last_mut().unwrap();
+        *stack_size += 8;
+        self.vars.insert(name, Variable::Local(*stack_size));
+        *stack_size
     }
 
     fn gen_record(&mut self, exprs: impl Iterator<Item = TypedExpr>, len: usize) -> IRExpr {
@@ -279,8 +282,8 @@ impl Generator {
     }
 
     fn gen_func(&mut self, func: TypedFunction) -> Function {
+        // Prepare to generate the function body
         self.push_scope();
-
         self.prefix = format!("{}{}___", self.prefix, func.name);
 
         // Insert parameters as variables
@@ -293,6 +296,7 @@ impl Generator {
 
         let mut body = self.gen_expr(*func.body);
 
+        let stack_size = *self.stack_sizes.last().unwrap();
         self.pop_scope();
         self.prefix
             .truncate(self.prefix.len() - format!("{}", func.name).len() - 3);
@@ -304,6 +308,7 @@ impl Generator {
             name: func.name,
             params,
             bbs,
+            stack_size,
         };
 
         func

@@ -52,18 +52,18 @@ const REG64_NAMES: [&str; 16] = [
     "rax", "rbx", "rcx", "rdx", "rbp", "rsp", "rdi", "rsi", "r8", "r9", "r10", "r11", "r12", "r13",
     "r14", "r15",
 ];
-const REG32_NAMES: [&str; 16] = [
-    "eax", "ebx", "ecx", "edx", "ebp", "esp", "edi", "esi", "r8d", "r9d", "r10d", "r11d", "r12d",
-    "r13d", "r14d", "r15d",
-];
-const REG16_NAMES: [&str; 16] = [
-    "ax", "bx", "cx", "dx", "bp", "sp", "di", "si", "r8w", "r9w", "r10w", "r11w", "r12w", "r13w",
-    "r14w", "r15w",
-];
-const REG8_NAMES: [&str; 16] = [
-    "al", "bl", "cl", "dl", "bpl", "spl", "dil", "sil", "r8b", "r9b", "r10b", "r11b", "r12b",
-    "r13b", "r14b", "r15b",
-];
+// const REG32_NAMES: [&str; 16] = [
+//     "eax", "ebx", "ecx", "edx", "ebp", "esp", "edi", "esi", "r8d", "r9d", "r10d", "r11d", "r12d",
+//     "r13d", "r14d", "r15d",
+// ];
+// const REG16_NAMES: [&str; 16] = [
+//     "ax", "bx", "cx", "dx", "bp", "sp", "di", "si", "r8w", "r9w", "r10w", "r11w", "r12w", "r13w",
+//     "r14w", "r15w",
+// ];
+// const REG8_NAMES: [&str; 16] = [
+//     "al", "bl", "cl", "dl", "bpl", "spl", "dil", "sil", "r8b", "r9b", "r10b", "r11b", "r12b",
+//     "r13b", "r14b", "r15b",
+// ];
 
 pub fn reg64_name(temp: Temp) -> Option<&'static str> {
     if let Some(i) = ALL_REGS.iter().position(|t| *t == temp) {
@@ -298,7 +298,7 @@ impl X64CodeGen {
                 ms.push(Mnemonic::Op {
                     text: format!("mov [$s0 - {}], $s1", loc),
                     dst: vec![],
-                    src: vec![*TEMP_FP, expr],
+                    src: vec![*RBP, expr],
                 })
             }
             Stmt::Store(addr, expr) => {
@@ -403,40 +403,44 @@ impl X64CodeGen {
         }
     }
 
-    fn gen_prologue(&mut self, ms: &mut Vec<Mnemonic>, params: Vec<Temp>) {
+    fn gen_prologue(&mut self, ms: &mut Vec<Mnemonic>, params: Vec<Temp>, stack_size: usize) {
         // push rbp
         // mov rbp, rsp
         // sub rsp, stack_size
 
-        ms.push(Mnemonic::Op {
-            text: "push $s0".to_string(),
-            dst: vec![],
-            src: vec![*RBP],
-        });
-        self.gen_stmt(ms, Stmt::Expr(*RBP, Expr::Temp(*RSP)));
-        ms.push(Mnemonic::Op {
-            text: format!("sub $d0, {}", 32),
-            dst: vec![*RSP],
-            src: vec![],
-        });
+        if stack_size != 0 {
+            ms.push(Mnemonic::Op {
+                text: "push $s0".to_string(),
+                dst: vec![],
+                src: vec![*RBP],
+            });
+            self.gen_stmt(ms, Stmt::Expr(*RBP, Expr::Temp(*RSP)));
+            ms.push(Mnemonic::Op {
+                text: format!("sub $d0, {}", stack_size),
+                dst: vec![*RSP],
+                src: vec![],
+            });
+        }
 
         for (param, reg) in params.into_iter().zip(ARG_REGS.iter()) {
             self.gen_stmt(ms, Stmt::Expr(param, Expr::Temp(*reg)));
         }
     }
 
-    fn gen_epilogue(&mut self, ms: &mut Vec<Mnemonic>, epilogue_label: Label) {
+    fn gen_epilogue(&mut self, ms: &mut Vec<Mnemonic>, epilogue_label: Label, stack_size: usize) {
         ms.push(Self::gen_label(epilogue_label));
 
         // mov rsp, rbp
         // pop rbp
 
-        self.gen_stmt(ms, Stmt::Expr(*RSP, Expr::Temp(*RBP)));
-        ms.push(Mnemonic::Op {
-            text: "pop $d0".to_string(),
-            dst: vec![*RBP],
-            src: vec![],
-        });
+        if stack_size != 0 {
+            self.gen_stmt(ms, Stmt::Expr(*RSP, Expr::Temp(*RBP)));
+            ms.push(Mnemonic::Op {
+                text: "pop $d0".to_string(),
+                dst: vec![*RBP],
+                src: vec![],
+            });
+        }
 
         let mut src = vec![*RAX, *RBP, *RSP];
         src.extend(&*CALLEE_SAVES);
@@ -452,7 +456,7 @@ impl X64CodeGen {
         let mut mnemonics = Vec::new();
 
         self.epilogue_label = Some(Label::new());
-        self.gen_prologue(&mut mnemonics, ir_func.params);
+        self.gen_prologue(&mut mnemonics, ir_func.params, ir_func.stack_size);
 
         let labels: Vec<Option<Label>> = ir_func.bbs.iter().map(|bb| bb.label).collect();
 
@@ -468,7 +472,11 @@ impl X64CodeGen {
             }
         }
 
-        self.gen_epilogue(&mut mnemonics, self.epilogue_label.unwrap());
+        self.gen_epilogue(
+            &mut mnemonics,
+            self.epilogue_label.unwrap(),
+            ir_func.stack_size,
+        );
         self.epilogue_label = None;
 
         Function {
