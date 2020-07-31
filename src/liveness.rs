@@ -188,6 +188,13 @@ pub fn calc_igraph(mnemonics: Vec<Mnemonic>) -> (Vec<BasicBlock>, InterferenceGr
     let mut igraph = Graph::new();
 
     for (i, bb) in bbs.iter().enumerate() {
+        if !livenesses[i].is_empty() {
+            // 初っ端のinsにしか出てこないテンポラリはigraphに追加されない
+            for temp in &livenesses[i][0].ins {
+                igraph.insert(*temp);
+            }
+        }
+
         for (j, mnemonic) in bb.mnemonics.iter().enumerate() {
             let liveness = &livenesses[i][j];
             match mnemonic {
