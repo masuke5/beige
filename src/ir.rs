@@ -115,6 +115,7 @@ pub struct Function {
     pub params: Vec<Temp>,
     pub bbs: Vec<BasicBlock>,
     pub stack_size: usize,
+    pub is_private: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -318,10 +319,11 @@ pub fn dump_module(module: &Module) {
 
     for (name, func) in &module.functions {
         println!(
-            "  \x1b[94m{}\x1b[0m({}): stack_size={}",
+            "  \x1b[94m{}\x1b[0m({}): stack_size={} is_private={}",
             name,
             format_iter(&func.params, ", "),
             func.stack_size,
+            func.is_private,
         );
         dump_bbs(&func.bbs, 1);
         println!();

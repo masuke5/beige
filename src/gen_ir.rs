@@ -2,7 +2,7 @@ use std::mem;
 
 use rustc_hash::FxHashMap;
 
-use crate::ast::BinOp;
+use crate::ast::{BinOp, Visibility};
 use crate::id::{Id, IdMap};
 use crate::ir::{
     BasicBlock, Cmp, Expr as IRExpr, Function, Label, Module, Stmt as IRStmt, Temp, TEMP_FP,
@@ -186,7 +186,7 @@ impl Generator {
                 )])
             }
             AE::LetFun(_, func) => {
-                let func = self.gen_func(func);
+                let func = self.gen_func(func, true);
                 self.create_func(func);
 
                 IE::DSeq(vec![])
@@ -281,7 +281,7 @@ impl Generator {
         }
     }
 
-    fn gen_func(&mut self, func: TypedFunction) -> Function {
+    fn gen_func(&mut self, func: TypedFunction, is_private: bool) -> Function {
         // Prepare to generate the function body
         self.push_scope();
         self.prefix = format!("{}{}___", self.prefix, func.name);
@@ -309,6 +309,7 @@ impl Generator {
             params,
             bbs,
             stack_size,
+            is_private,
         };
 
         func
@@ -324,8 +325,8 @@ impl Generator {
             new_module.constants.insert(label, expr);
         }
 
-        for (_, (_, func)) in module.functions {
-            let func = self.gen_func(func);
+        for (_, (visibility, func)) in module.functions {
+            let func = self.gen_func(func, visibility == Visibility::Private);
             new_module.functions.insert(func.name, func);
         }
 

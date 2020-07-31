@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::ast::{Type as AstType, TypeKind as AstTypeKind, *};
-use crate::id::Id;
+use crate::id::{Id, IdMap};
 use crate::scope_map::ScopeMap;
 use crate::ty::{generate_arrow_type, unify, MetaMap, Type, TypeCon, TypeError, TypePool};
 
@@ -352,6 +352,10 @@ impl Typing {
         // Infer function
         for (name, (visibility, func)) in module.functions {
             if let Some(func) = self.infer_func(func) {
+                if func.name == IdMap::new_id("main") && visibility != Visibility::Public {
+                    error!(&func.params[0].span, "the main function must be public");
+                }
+
                 // Insert as variables
                 let ty = generate_arrow_type(&func.param_types, &func.body.ty);
                 self.vars.insert(func.name, ty);

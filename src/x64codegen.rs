@@ -482,6 +482,7 @@ impl X64CodeGen {
         Function {
             name: ir_func.name,
             mnemonics,
+            is_private: ir_func.is_private,
         }
     }
 }
@@ -518,7 +519,10 @@ impl CodeGen for X64CodeGen {
         out += "section text\n";
 
         for func in module.functions {
-            out += &format!("global {}\n", func.name);
+            if !func.is_private {
+                out += &format!("global {}\n", func.name);
+            }
+
             out += &format!("{}:\n", func.name);
             for mnemonic in func.mnemonics {
                 out += &format!(

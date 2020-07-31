@@ -29,6 +29,7 @@ pub enum Mnemonic {
 pub struct Function {
     pub name: Id,
     pub mnemonics: Vec<Mnemonic>,
+    pub is_private: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
