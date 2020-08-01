@@ -40,6 +40,10 @@ impl WorkGraph {
         }
 
         let mut move_adjacents = FxHashMap::default();
+
+        for temp in adjacents.keys() {
+            move_adjacents.insert(*temp, FxHashSet::default());
+        }
         for temp in move_graph.iter() {
             let adjacent = move_graph.adjacent(temp).copied().collect();
             move_adjacents.insert(*temp, adjacent);
@@ -55,10 +59,8 @@ impl WorkGraph {
         };
 
         for temp in graph.iter().collect::<Vec<_>>() {
-            if graph.is_move_related(temp) {
-                for adj in graph.move_adjacent(temp).collect::<Vec<_>>() {
-                    graph.add_move_edge(temp, adj);
-                }
+            for adj in graph.move_adjacent(temp).collect::<Vec<_>>() {
+                graph.add_move_edge(temp, adj);
             }
         }
 
@@ -135,17 +137,17 @@ impl WorkGraph {
             return;
         }
 
-        for adj in self.adjacent(b).collect::<Vec<_>>() {
+        let adjacent: Vec<_> = self.adjacent(b).collect();
+        let move_adjacent: Vec<_> = self.move_adjacent(b).collect();
+        self.remove(b);
+
+        for adj in adjacent {
             self.add_edge(a, adj);
         }
 
-        if self.is_move_related(b) {
-            for adj in self.move_adjacent(b).collect::<Vec<_>>() {
-                self.add_move_edge(a, adj);
-            }
+        for adj in move_adjacent {
+            self.add_move_edge(a, adj);
         }
-
-        self.remove(b);
 
         // aliases
         // c --> b
@@ -181,8 +183,8 @@ impl WorkGraph {
         use crate::dump::format_iter;
 
         for temp in self.iter() {
-            print!(
-                "{: <7} adj:{} degree:{} coalesced:{}",
+            println!(
+                "{: <7} adj:{} degree:{} coalesced:{} move_adj:{}",
                 format!("{}", reg_name(temp)),
                 format_iter(self.adjacent(temp).map(reg_name).collect::<Vec<_>>(), ","),
                 self.degree(temp),
@@ -190,19 +192,11 @@ impl WorkGraph {
                     self.coalesced_temps(temp).map(reg_name).collect::<Vec<_>>(),
                     ","
                 ),
-            );
-
-            if self.is_move_related(temp) {
-                print!(
-                    " move_adj:{}",
-                    format_iter(
-                        self.move_adjacent(temp).map(reg_name).collect::<Vec<_>>(),
-                        ","
-                    )
+                format_iter(
+                    self.move_adjacent(temp).map(reg_name).collect::<Vec<_>>(),
+                    ","
                 )
-            }
-
-            println!();
+            );
         }
 
         println!("Moves:");
@@ -394,23 +388,8 @@ impl Color {
             }
         }
 
-        for temp in self.graph.iter() {
-            assert!(self.is_precolored(temp));
-
-            for coalesced in self.graph.coalesced_temps(temp) {
-                self.colored_temps.insert(coalesced, temp);
-            }
-        }
-
-        for (temp, reg) in self
-            .colored_temps
-            .iter()
-            .map(|(t, r)| (*t, *r))
-            .collect::<Vec<_>>()
-        {
-            for coalesced in self.graph.coalesced_temps(temp) {
-                self.colored_temps.insert(coalesced, reg);
-            }
+        for (temp, reg) in &self.graph.aliases {
+            self.colored_temps.insert(*temp, *reg);
         }
     }
 

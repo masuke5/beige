@@ -191,7 +191,9 @@ pub fn calc_igraph(mnemonics: Vec<Mnemonic>) -> (Vec<BasicBlock>, InterferenceGr
         if !livenesses[i].is_empty() {
             // 初っ端のinsにしか出てこないテンポラリはigraphに追加されない
             for temp in &livenesses[i][0].ins {
-                igraph.insert(*temp);
+                if !igraph.contains(temp) {
+                    igraph.insert(*temp);
+                }
             }
         }
 

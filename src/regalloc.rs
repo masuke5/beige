@@ -3,7 +3,28 @@ use crate::color::{color, ColorResult};
 use crate::ir::{Label, Temp};
 use crate::liveness::{self, BasicBlock};
 use crate::x64codegen;
+use log::debug;
 use rustc_hash::FxHashMap;
+
+fn replace_operand(mut mnemonic: Mnemonic, map: &FxHashMap<Temp, Temp>) -> Mnemonic {
+    match &mut mnemonic {
+        Mnemonic::Op { src, dst, .. } | Mnemonic::Jump { src, dst, .. } => {
+            for src in src {
+                *src = *map.get(src).unwrap_or(src);
+            }
+            for dst in dst {
+                *dst = *map.get(dst).unwrap_or(dst);
+            }
+        }
+        Mnemonic::Move { src, dst, .. } => {
+            *src = *map.get(src).unwrap_or(src);
+            *dst = *map.get(dst).unwrap_or(dst);
+        }
+        _ => {}
+    }
+
+    mnemonic
+}
 
 fn rewrite(bbs: Vec<BasicBlock>, map: &FxHashMap<Temp, Temp>) -> Vec<Mnemonic> {
     let mut mnemonics = Vec::new();
@@ -11,31 +32,16 @@ fn rewrite(bbs: Vec<BasicBlock>, map: &FxHashMap<Temp, Temp>) -> Vec<Mnemonic> {
     let labels: Vec<Option<Label>> = bbs.iter().map(|bb| bb.label).collect();
 
     for (i, bb) in bbs.into_iter().enumerate() {
-        let mut iter = bb.mnemonics.into_iter();
-
-        // Remove redundant label
-        match iter.next() {
-            Some(Mnemonic::Label { .. }) if bb.label_is_redundant => {}
-            Some(mnemonic) => mnemonics.push(mnemonic),
-            None => {}
-        };
-
-        for mut mnemonic in iter {
-            match &mut mnemonic {
-                Mnemonic::Op { src, dst, .. } | Mnemonic::Jump { src, dst, .. } => {
-                    for src in src {
-                        *src = *map.get(src).unwrap_or(src);
-                    }
-                    for dst in dst {
-                        *dst = *map.get(dst).unwrap_or(dst);
-                    }
-                }
-                Mnemonic::Move { src, dst, .. } => {
-                    *src = *map.get(src).unwrap_or(src);
-                    *dst = *map.get(dst).unwrap_or(dst);
-                }
-                _ => {}
+        for (j, mnemonic) in bb.mnemonics.into_iter().enumerate() {
+            if j == 0 && bb.label_is_redundant {
+                assert!(match mnemonic {
+                    Mnemonic::Label { .. } => true,
+                    _ => false,
+                });
+                continue;
             }
+
+            let mnemonic = replace_operand(mnemonic, map);
 
             // Remove redundant jump
             if let Mnemonic::Jump { jump, .. } = &mnemonic {
@@ -64,6 +70,8 @@ fn remove_redundant_moves(mnemonics: Vec<Mnemonic>) -> Vec<Mnemonic> {
 }
 
 pub fn regalloc(mut func: Function) -> Function {
+    debug!("Alloc register in function `{}`", func.name);
+
     let (bbs, igraph) = liveness::calc_igraph(func.mnemonics);
 
     let priority: FxHashMap<Temp, u32> = x64codegen::ALL_REGS
