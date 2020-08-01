@@ -179,6 +179,7 @@ impl WorkGraph {
         }
     }
 
+    #[allow(dead_code)]
     fn dump(&self) {
         use crate::dump::format_iter;
 
@@ -271,6 +272,7 @@ struct Color {
     register_priority: FxHashMap<Temp, u32>,
     colored_temps: FxHashMap<Temp, Temp>,
     spilled_temps: Vec<Temp>,
+    freeze_worklist: Vec<(Temp, Temp)>,
 }
 
 impl Color {
@@ -289,6 +291,7 @@ impl Color {
             colored_temps: FxHashMap::default(),
             registers,
             register_priority,
+            freeze_worklist: Vec::new(),
         }
     }
 

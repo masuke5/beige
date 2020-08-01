@@ -15,6 +15,7 @@ mod ty;
 
 mod codegen;
 mod color;
+mod dbgcodegen;
 mod gen_ir;
 mod lexer;
 mod liveness;
@@ -212,9 +213,9 @@ pub fn compile(option: CompileOption) {
     // Select instructions
     debug!("Select instructions `{}`", file);
 
-    let mut codegen = match option.target {
-        Target::X86_64 => x64codegen::X64CodeGen::new(),
-        Target::Debug => unimplemented!(),
+    let mut codegen: Box<dyn CodeGen> = match option.target {
+        Target::X86_64 => Box::new(x64codegen::X64CodeGen::new()),
+        Target::Debug => Box::new(dbgcodegen::DebugCodeGen::new()),
     };
 
     let mut module = codegen.codegen(ir_module);

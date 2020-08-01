@@ -2,7 +2,6 @@ use crate::codegen::{Function, Mnemonic};
 use crate::color::{color, ColorResult};
 use crate::ir::{Label, Temp};
 use crate::liveness::{self, BasicBlock};
-use crate::x64codegen;
 use log::debug;
 use rustc_hash::FxHashMap;
 
@@ -74,18 +73,18 @@ pub fn regalloc(mut func: Function) -> Function {
 
     let (bbs, igraph) = liveness::calc_igraph(func.mnemonics);
 
-    let priority: FxHashMap<Temp, u32> = x64codegen::ALL_REGS
-        .iter()
-        .copied()
-        .zip(x64codegen::REG_PRIORITY.iter().copied())
-        .collect();
+    // let registers = x64codegen::ALL_REGS.iter().copied().collect();
+    // let priority: FxHashMap<Temp, u32> = x64codegen::ALL_REGS
+    //     .iter()
+    //     .copied()
+    //     .zip(x64codegen::REG_PRIORITY.iter().copied())
+    //     .collect();
 
-    let result = color(
-        &bbs,
-        igraph,
-        x64codegen::ALL_REGS.iter().copied().collect(),
-        priority,
-    );
+    let registers: rustc_hash::FxHashSet<Temp> =
+        crate::dbgcodegen::REGISTERS.iter().copied().collect();
+    let priority = registers.iter().map(|t| (*t, 0)).collect();
+
+    let result = color(&bbs, igraph, registers, priority);
 
     match result {
         ColorResult::Spilled(..) => panic!("spilled"),
