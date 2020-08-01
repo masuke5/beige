@@ -44,26 +44,18 @@ pub enum OutputType {
     Binary,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct CompileOption {
-    directory: PathBuf,
-    output: OutputType,
-    out_dir: PathBuf,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    X86_64,
+    Debug, // for debugging register allocation
 }
 
-impl CompileOption {
-    pub fn new(directory: impl AsRef<Path>, out_dir: impl AsRef<Path>) -> Self {
-        Self {
-            directory: directory.as_ref().to_path_buf(),
-            output: OutputType::Binary,
-            out_dir: out_dir.as_ref().to_path_buf(),
-        }
-    }
-
-    pub fn output(mut self, output: OutputType) -> Self {
-        self.output = output;
-        self
-    }
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompileOption {
+    pub directory: PathBuf,
+    pub output: OutputType,
+    pub out_dir: PathBuf,
+    pub target: Target,
 }
 
 fn assemble(asm_files: &[PathBuf]) -> (bool, Vec<PathBuf>) {
@@ -219,7 +211,12 @@ pub fn compile(option: CompileOption) {
 
     // Select instructions
     debug!("Select instructions `{}`", file);
-    let mut codegen = x64codegen::X64CodeGen::new();
+
+    let mut codegen = match option.target {
+        Target::X86_64 => x64codegen::X64CodeGen::new(),
+        Target::Debug => unimplemented!(),
+    };
+
     let mut module = codegen.codegen(ir_module);
 
     if option.output == OutputType::Assembly1 {

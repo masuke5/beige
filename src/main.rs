@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use beige::{CompileOption, OutputType};
+use beige::{CompileOption, OutputType, Target};
 use clap::Clap;
 
 struct OutputTypeFromStr {
@@ -27,11 +27,30 @@ impl FromStr for OutputTypeFromStr {
     }
 }
 
+struct TargetFromStr {
+    inner: Target,
+}
+
+impl FromStr for TargetFromStr {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let ty = match s {
+            "x86_64" => Target::X86_64,
+            "dbg" => Target::Debug,
+            s => return Err(format!("unknown dump type: `{}`", s)),
+        };
+
+        Ok(TargetFromStr { inner: ty })
+    }
+}
 #[derive(Clap)]
 #[clap(author, about, version)]
 struct Opts {
     #[clap(short, long)]
     dump: Option<OutputTypeFromStr>,
+    #[clap(short, long)]
+    target: Option<TargetFromStr>,
     #[clap(name = "DIRECTORY", parse(from_os_str))]
     directory: PathBuf,
     #[clap(short, long)]
@@ -41,7 +60,13 @@ struct Opts {
 fn main() {
     let opt = Opts::parse();
     let dump = opt.dump.map(|d| d.inner).unwrap_or(OutputType::Binary);
+    let target = opt.target.map(|d| d.inner).unwrap_or(Target::X86_64);
 
-    let option = CompileOption::new(opt.directory, opt.output).output(dump);
+    let option = CompileOption {
+        directory: opt.directory,
+        output: dump,
+        out_dir: opt.output,
+        target,
+    };
     beige::compile(option);
 }
