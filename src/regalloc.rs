@@ -3,7 +3,7 @@ use crate::color::{color, ColorResult};
 use crate::ir::{Label, Temp};
 use crate::liveness::{self, BasicBlock};
 use log::debug;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 fn replace_operand(mut mnemonic: Mnemonic, map: &FxHashMap<Temp, Temp>) -> Mnemonic {
     match &mut mnemonic {
@@ -68,22 +68,14 @@ fn remove_redundant_moves(mnemonics: Vec<Mnemonic>) -> Vec<Mnemonic> {
         .collect()
 }
 
-pub fn regalloc(mut func: Function) -> Function {
+pub fn regalloc(
+    mut func: Function,
+    registers: FxHashSet<Temp>,
+    priority: FxHashMap<Temp, u32>,
+) -> Function {
     debug!("Alloc register in function `{}`", func.name);
 
     let (bbs, igraph) = liveness::calc_igraph(func.mnemonics);
-
-    // let registers = x64codegen::ALL_REGS.iter().copied().collect();
-    // let priority: FxHashMap<Temp, u32> = x64codegen::ALL_REGS
-    //     .iter()
-    //     .copied()
-    //     .zip(x64codegen::REG_PRIORITY.iter().copied())
-    //     .collect();
-
-    let registers: rustc_hash::FxHashSet<Temp> =
-        crate::dbgcodegen::REGISTERS.iter().copied().collect();
-    let priority = registers.iter().map(|t| (*t, 0)).collect();
-
     let result = color(&bbs, igraph, registers, priority);
 
     match result {

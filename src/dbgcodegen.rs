@@ -4,7 +4,7 @@ use lazy_static::lazy_static;
 use std::iter;
 
 // Adjust depending on the purpose of debugging
-const REG_COUNT: usize = 32; // it must be at least 1
+const REG_COUNT: usize = 32; // it must be at least 3
 
 lazy_static! {
     // return value = R0
@@ -17,7 +17,7 @@ lazy_static! {
         regs.extend(iter::repeat_with(|| Temp::new()).take(REG_COUNT - regs.len()));
         regs
     };
-
+    pub static ref REG_PRIORITY: Vec<u32> = (0..REG_COUNT).map(|n| n as u32).rev().collect();
     pub static ref RV: Temp = *R0;
     pub static ref PARAMS: [Temp; 3] = [*R0, *R1, *R2];
 }

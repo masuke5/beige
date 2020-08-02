@@ -26,7 +26,9 @@ mod x64codegen;
 
 use codegen::CodeGen;
 use id::IdMap;
+use ir::Temp;
 use log::debug;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -57,6 +59,29 @@ pub struct CompileOption {
     pub output: OutputType,
     pub out_dir: PathBuf,
     pub target: Target,
+}
+
+fn registers(target: Target) -> (FxHashSet<Temp>, FxHashMap<Temp, u32>) {
+    match target {
+        Target::X86_64 => {
+            let registers = x64codegen::ALL_REGS.iter().copied().collect();
+            let priority = x64codegen::ALL_REGS
+                .iter()
+                .copied()
+                .zip(x64codegen::REG_PRIORITY.iter().copied())
+                .collect();
+            (registers, priority)
+        }
+        Target::Debug => {
+            let registers = dbgcodegen::REGISTERS.iter().copied().collect();
+            let priority = dbgcodegen::REGISTERS
+                .iter()
+                .copied()
+                .zip(dbgcodegen::REG_PRIORITY.iter().copied())
+                .collect();
+            (registers, priority)
+        }
+    }
 }
 
 fn assemble(asm_files: &[PathBuf]) -> (bool, Vec<PathBuf>) {
@@ -227,9 +252,16 @@ pub fn compile(option: CompileOption) {
 
     // Register allocation
     debug!("Alloc registers `{}`", file);
+
     let mut functions = Vec::with_capacity(module.functions.len());
+    let (registers, priority) = registers(option.target);
+
     for func in module.functions {
-        functions.push(regalloc::regalloc(func));
+        functions.push(regalloc::regalloc(
+            func,
+            registers.clone(),
+            priority.clone(),
+        ));
     }
 
     module.functions = functions;
