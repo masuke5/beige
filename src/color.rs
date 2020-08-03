@@ -5,6 +5,7 @@ use crate::liveness::{BasicBlock, InterferenceGraph};
 use log::debug;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Reverse;
+use std::mem;
 
 // TODO: 効率の良い実装
 
@@ -79,10 +80,6 @@ impl WorkGraph {
         self.adjacents.keys().copied()
     }
 
-    fn len(&self) -> usize {
-        self.adjacents.len()
-    }
-
     fn adjacent(&self, temp: Temp) -> impl Iterator<Item = Temp> + '_ {
         self.adjacents[&self.alias(temp)].iter().copied()
     }
@@ -93,6 +90,12 @@ impl WorkGraph {
 
     fn coalesced_temps(&self, temp: Temp) -> impl Iterator<Item = Temp> + '_ {
         self.coalesced_temps[&self.alias(temp)].iter().copied()
+    }
+
+    fn is_interference(&self, a: Temp, b: Temp) -> bool {
+        let a = self.alias(a);
+        let b = self.alias(b);
+        self.adjacents[&a].contains(&b)
     }
 
     fn remove(&mut self, temp: Temp) {
@@ -266,13 +269,14 @@ impl WorkGraph {
 struct Color {
     igraph: InterferenceGraph,
     graph: WorkGraph,
-    move_graph: Graph<Temp>,
     simplified_temps: Vec<Temp>,
     registers: FxHashSet<Temp>,
     register_priority: FxHashMap<Temp, u32>,
     colored_temps: FxHashMap<Temp, Temp>,
     spilled_temps: Vec<Temp>,
     freeze_worklist: Vec<(Temp, Temp)>,
+    coalesce_worklist: FxHashSet<(Temp, Temp)>,
+    spill_worklist: Vec<(Temp, Temp)>,
 }
 
 impl Color {
@@ -283,15 +287,16 @@ impl Color {
         register_priority: FxHashMap<Temp, u32>,
     ) -> Self {
         Self {
-            graph: WorkGraph::from_graph(igraph.clone(), move_graph.clone()),
+            graph: WorkGraph::from_graph(igraph.clone(), move_graph),
             igraph,
-            move_graph,
             simplified_temps: Vec::new(),
             spilled_temps: Vec::new(),
             colored_temps: FxHashMap::default(),
             registers,
             register_priority,
             freeze_worklist: Vec::new(),
+            coalesce_worklist: FxHashSet::default(),
+            spill_worklist: Vec::new(),
         }
     }
 
@@ -303,23 +308,12 @@ impl Color {
         self.graph.degree(temp) >= self.registers.len()
     }
 
-    fn is_interference(&self, a: Temp, b: Temp) -> bool {
-        self.graph.adjacent(a).find(|t| *t == b).is_some()
-    }
-
     fn can_coalesce(&self, a: Temp, b: Temp) -> bool {
         assert!(!self.is_precolored(a) || !self.is_precolored(b));
 
-        let ab_adj: FxHashSet<_> = self
-            .graph
+        self.graph
             .adjacent(a)
-            .chain(self.graph.adjacent(b))
-            .collect();
-        ab_adj
-            .into_iter()
-            .filter(|adj| self.is_significant_degree(*adj))
-            .count()
-            < self.registers.len()
+            .all(|adj| self.graph.is_interference(adj, b) || !self.is_significant_degree(adj))
     }
 
     fn simplify(&mut self) {
@@ -335,34 +329,94 @@ impl Color {
             None => return,
         };
 
+        debug!("Simplify {}", reg_name(temp));
+
         self.simplified_temps.push(temp);
+
+        // Enable moves related to nodes that won't be signficant degree
+        for x in self.graph.adjacent(temp) {
+            if self.graph.degree(x) <= self.registers.len() {
+                for y in self.graph.move_adjacent(x) {
+                    if (!self.is_precolored(x) || !self.is_precolored(y))
+                        && (!self.coalesce_worklist.contains(&(x, y))
+                            && !self.coalesce_worklist.contains(&(y, x)))
+                    {
+                        debug!("Enable move ({}, {})", reg_name(x), reg_name(y));
+                        self.coalesce_worklist.insert((x, y));
+                    }
+                }
+            }
+        }
+
         self.graph.remove(temp);
     }
 
     fn coalesce(&mut self) {
-        let (x, y) = match self
-            .graph
-            .move_edges()
-            .filter(|(a, b)| !self.is_precolored(*a) || !self.is_precolored(*b))
-            .next()
-        {
+        let (mut x, mut y) = match self.coalesce_worklist.iter().copied().next() {
             Some(m) => m,
             None => return,
         };
+        self.coalesce_worklist.remove(&(x, y));
 
         if self.can_coalesce(x, y) {
-            debug!("Coalesce {} and {}", reg_name(x), reg_name(y));
+            debug!("Coalesce ({}, {})", reg_name(x), reg_name(y));
 
             if self.is_precolored(y) {
-                self.graph.coalesce(y, x);
-            } else {
-                self.graph.coalesce(x, y);
+                mem::swap(&mut x, &mut y);
             }
+
+            self.graph.coalesce(x, y);
+
+            let moves: Vec<(Temp, Temp)> = self
+                .coalesce_worklist
+                .iter()
+                .filter(|(a, b)| *a == y || *b == y)
+                .copied()
+                .collect();
+            for (a, b) in moves {
+                self.coalesce_worklist.remove(&(a, b));
+                self.coalesce_worklist.remove(&(b, a));
+
+                let a = self.graph.alias(a);
+                let b = self.graph.alias(b);
+                assert_ne!(a, b);
+
+                if !self.coalesce_worklist.contains(&(a, b))
+                    && !self.coalesce_worklist.contains(&(b, a))
+                {
+                    self.coalesce_worklist.insert((a, b));
+                }
+            }
+        } else {
+            debug!("Coalesce ({}, {}) (failed)", reg_name(x), reg_name(y));
         }
     }
 
     fn freeze(&mut self) {
-        unimplemented!()
+        if !self.coalesce_worklist.is_empty() {
+            return;
+        }
+
+        let temp = match self
+            .graph
+            .iter()
+            .filter(|t| {
+                !self.is_significant_degree(*t)
+                    && self.graph.is_move_related(*t)
+                    && !self.is_precolored(*t)
+            })
+            .next()
+        {
+            Some(mov) => mov,
+            None => return,
+        };
+
+        debug!("Freeze {}", reg_name(temp));
+
+        let adjs: Vec<Temp> = self.graph.move_adjacent(temp).collect();
+        for adj in adjs {
+            self.graph.remove_move_edge(temp, adj);
+        }
     }
 
     fn select_spill(&mut self) {
@@ -373,10 +427,12 @@ impl Color {
         while let Some(temp) = self.simplified_temps.pop() {
             let mut ok_regs = self.registers.clone();
             for adj in self.igraph.adjacent(&temp) {
-                if let Some(reg) = self.registers.get(adj) {
+                let adj = self.graph.alias(*adj);
+
+                if let Some(reg) = self.registers.get(&adj) {
                     ok_regs.remove(reg);
                 }
-                if let Some(reg) = self.colored_temps.get(adj) {
+                if let Some(reg) = self.colored_temps.get(&adj) {
                     ok_regs.remove(reg);
                 }
             }
@@ -392,7 +448,12 @@ impl Color {
         }
 
         for (temp, reg) in &self.graph.aliases {
-            self.colored_temps.insert(*temp, *reg);
+            if self.is_precolored(*reg) {
+                self.colored_temps.insert(*temp, *reg);
+            } else {
+                let reg = self.colored_temps[reg];
+                self.colored_temps.insert(*temp, reg);
+            }
         }
     }
 
@@ -405,11 +466,18 @@ impl Color {
     }
 
     fn color(mut self) -> ColorResult {
+        self.coalesce_worklist = self
+            .graph
+            .move_edges()
+            .filter(|(a, b)| !self.is_precolored(*a) || !self.is_precolored(*b))
+            .filter(|(a, b)| !self.graph.is_interference(*a, *b))
+            .collect();
+
         while !self.is_completed() {
             // self.dump();
             self.simplify();
             self.coalesce();
-            // self.freeze();
+            self.freeze();
             // self.select_spill();
         }
 

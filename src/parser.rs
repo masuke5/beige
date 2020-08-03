@@ -202,9 +202,9 @@ impl Parser {
                     lhs = UntypedExpr::new(expr, span);
 
                     if allow_join {
-                        return Some(lhs);
-                    } else {
                         continue 'outer;
+                    } else {
+                        return Some(lhs);
                     }
                 }
             }

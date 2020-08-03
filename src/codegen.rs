@@ -45,10 +45,12 @@ pub trait CodeGen {
 }
 
 pub fn reg_name(temp: Temp) -> String {
-    use crate::x64codegen::reg64_name as x64reg;
+    use crate::dbgcodegen::reg_name as dbg_reg;
+    use crate::x64codegen::reg64_name as x64_reg;
 
-    x64reg(temp)
+    x64_reg(temp)
         .map(String::from)
+        .or_else(|| dbg_reg(temp))
         .unwrap_or_else(|| format!("{}", temp))
 }
 
