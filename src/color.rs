@@ -272,6 +272,7 @@ struct Color {
     simplified_temps: Vec<Temp>,
     registers: FxHashSet<Temp>,
     register_priority: FxHashMap<Temp, u32>,
+    spill_priority: FxHashMap<Temp, f32>,
     colored_temps: FxHashMap<Temp, Temp>,
     spilled_temps: Vec<Temp>,
     freeze_worklist: Vec<(Temp, Temp)>,
@@ -285,6 +286,7 @@ impl Color {
         registers: FxHashSet<Temp>,
         move_graph: Graph<Temp>,
         register_priority: FxHashMap<Temp, u32>,
+        spill_priority: FxHashMap<Temp, f32>,
     ) -> Self {
         Self {
             graph: WorkGraph::from_graph(igraph.clone(), move_graph),
@@ -294,6 +296,7 @@ impl Color {
             colored_temps: FxHashMap::default(),
             registers,
             register_priority,
+            spill_priority,
             freeze_worklist: Vec::new(),
             coalesce_worklist: FxHashSet::default(),
             spill_worklist: Vec::new(),
@@ -316,23 +319,7 @@ impl Color {
             .all(|adj| self.graph.is_interference(adj, b) || !self.is_significant_degree(adj))
     }
 
-    fn simplify(&mut self) {
-        // Find simplification target
-        let temp = self.graph.iter().find(|temp| {
-            !self.is_precolored(*temp)
-                && !self.is_significant_degree(*temp)
-                && !self.graph.is_move_related(*temp)
-        });
-        let temp = match temp {
-            Some(t) => t,
-            // If a target is not found, do nothing
-            None => return,
-        };
-
-        debug!("Simplify {}", reg_name(temp));
-
-        self.simplified_temps.push(temp);
-
+    fn remove_temp(&mut self, temp: Temp) {
         // Enable moves related to nodes that won't be signficant degree
         for x in self.graph.adjacent(temp) {
             if self.graph.degree(x) <= self.registers.len() {
@@ -351,6 +338,25 @@ impl Color {
         self.graph.remove(temp);
     }
 
+    fn simplify(&mut self) {
+        // Find simplification target
+        let temp = self.graph.iter().find(|temp| {
+            !self.is_precolored(*temp)
+                && !self.is_significant_degree(*temp)
+                && !self.graph.is_move_related(*temp)
+        });
+        let temp = match temp {
+            Some(t) => t,
+            // If a target is not found, do nothing
+            None => return,
+        };
+
+        debug!("Simplify {}", reg_name(temp));
+
+        self.simplified_temps.push(temp);
+        self.remove_temp(temp);
+    }
+
     fn coalesce(&mut self) {
         let (mut x, mut y) = match self.coalesce_worklist.iter().copied().next() {
             Some(m) => m,
@@ -367,6 +373,7 @@ impl Color {
 
             self.graph.coalesce(x, y);
 
+            // Update temporaries in coalesce worklist
             let moves: Vec<(Temp, Temp)> = self
                 .coalesce_worklist
                 .iter()
@@ -380,6 +387,10 @@ impl Color {
                 let a = self.graph.alias(a);
                 let b = self.graph.alias(b);
                 assert_ne!(a, b);
+
+                if self.is_precolored(a) && self.is_precolored(b) {
+                    continue;
+                }
 
                 if !self.coalesce_worklist.contains(&(a, b))
                     && !self.coalesce_worklist.contains(&(b, a))
@@ -420,7 +431,24 @@ impl Color {
     }
 
     fn select_spill(&mut self) {
-        unimplemented!()
+        let temp = match self
+            .graph
+            .iter()
+            .filter(|t| !self.is_precolored(*t))
+            .filter(|t| self.is_significant_degree(*t))
+            .min_by(|a, b| {
+                self.spill_priority[a]
+                    .partial_cmp(&self.spill_priority[b])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+            Some(t) => t,
+            None => return,
+        };
+
+        debug!("Spill {}", reg_name(temp));
+
+        self.simplified_temps.push(temp);
+        self.remove_temp(temp);
     }
 
     fn select_colors(&mut self) {
@@ -478,7 +506,7 @@ impl Color {
             self.simplify();
             self.coalesce();
             self.freeze();
-            // self.select_spill();
+            self.select_spill();
         }
 
         self.select_colors();
@@ -514,6 +542,7 @@ pub fn color(
     igraph: InterferenceGraph,
     registers: FxHashSet<Temp>,
     register_priority: FxHashMap<Temp, u32>,
+    spill_priority: FxHashMap<Temp, f32>,
 ) -> ColorResult {
     let mut move_graph = Graph::new();
     for bb in bbs {
@@ -529,7 +558,13 @@ pub fn color(
         }
     }
 
-    let color = Color::new(igraph, registers, move_graph, register_priority);
+    let color = Color::new(
+        igraph,
+        registers,
+        move_graph,
+        register_priority,
+        spill_priority,
+    );
     color.color()
 }
 

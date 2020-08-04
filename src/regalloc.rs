@@ -1,5 +1,6 @@
-use crate::codegen::{Function, Mnemonic};
+use crate::codegen::{reg_name, CodeGen, Function, Mnemonic};
 use crate::color::{color, ColorResult};
+use crate::dump::format_iter;
 use crate::ir::{Label, Temp};
 use crate::liveness::{self, BasicBlock};
 use log::debug;
@@ -70,16 +71,40 @@ fn remove_redundant_moves(mnemonics: Vec<Mnemonic>) -> Vec<Mnemonic> {
 
 pub fn regalloc(
     mut func: Function,
+    codegen: &mut dyn CodeGen,
     registers: FxHashSet<Temp>,
     priority: FxHashMap<Temp, u32>,
 ) -> Function {
     debug!("Alloc register in function `{}`", func.name);
 
-    let (bbs, igraph) = liveness::calc_igraph(func.mnemonics);
-    let result = color(&bbs, igraph, registers, priority);
+    let func_for_spill = func.clone();
+
+    let (bbs, igraph, spill_priority) = liveness::calc_igraph(func.mnemonics);
+    let result = color(
+        &bbs,
+        igraph,
+        registers.clone(),
+        priority.clone(),
+        spill_priority.clone(),
+    );
 
     match result {
-        ColorResult::Spilled(..) => panic!("spilled"),
+        ColorResult::Spilled(spilled_temps) => {
+            debug!(
+                "Spilled {}",
+                format_iter(spilled_temps.iter().copied().map(reg_name), ", ")
+            );
+
+            let func = codegen.spill(func_for_spill, &spilled_temps);
+
+            // println!("============");
+            // for mnemonic in &func.mnemonics {
+            //     println!("{}", crate::codegen::format_mnemonic(mnemonic, reg_name));
+            // }
+            // println!("============");
+
+            regalloc(func, codegen, registers, priority)
+        }
         ColorResult::Completed(map) => {
             func.mnemonics = rewrite(bbs, &map);
             func.mnemonics = remove_redundant_moves(func.mnemonics);

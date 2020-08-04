@@ -3,8 +3,8 @@ use crate::ir::{
     Cmp, Expr, Function as IRFunction, Label, Module as IRModule, Stmt, Temp, TEMP_FP,
 };
 use crate::token;
-
 use lazy_static::lazy_static;
+use rustc_hash::FxHashMap;
 
 fn escape_str(s: &str) -> String {
     token::escape_str(s)
@@ -481,6 +481,7 @@ impl X64CodeGen {
 
         Function {
             name: ir_func.name,
+            stack_size: ir_func.stack_size,
             mnemonics,
             is_private: ir_func.is_private,
         }
@@ -501,6 +502,79 @@ impl CodeGen for X64CodeGen {
             strings,
             constants: Vec::new(),
         }
+    }
+
+    fn spill(&mut self, mut func: Function, spilled_temps: &[Temp]) -> Function {
+        fn load_from_memory(slf: &mut X64CodeGen, ms: &mut Vec<Mnemonic>, loc: usize) -> Temp {
+            let t = Temp::new();
+            slf.gen_stmt(
+                ms,
+                Stmt::Expr(
+                    t,
+                    Expr::Load(box Expr::Sub(
+                        box Expr::Temp(*TEMP_FP),
+                        box Expr::Int(loc as i64),
+                    )),
+                ),
+            );
+            t
+        };
+
+        fn save_to_memory(slf: &mut X64CodeGen, ms: &mut Vec<Mnemonic>, loc: usize, temp: Temp) {
+            slf.gen_stmt(
+                ms,
+                Stmt::Store(
+                    Expr::Sub(box Expr::Temp(*TEMP_FP), box Expr::Int(loc as i64)),
+                    Expr::Temp(temp),
+                ),
+            );
+        };
+
+        // Allocate variables to save spilled temporaries
+        let mut spilled_temp_locs = FxHashMap::default();
+        for temp in spilled_temps {
+            func.stack_size += 8;
+            spilled_temp_locs.insert(*temp, func.stack_size);
+        }
+
+        // Insert mnemonics for saving spilled temporaries
+        let mut mnemonics = Vec::with_capacity(func.mnemonics.len());
+        for mut mnemonic in func.mnemonics {
+            let locs: Vec<(usize, Temp)> = match &mut mnemonic {
+                Mnemonic::Op { src, dst, .. } | Mnemonic::Jump { src, dst, .. } => {
+                    for spilled in src.iter_mut().filter(|t| spilled_temp_locs.contains_key(t)) {
+                        let loc = spilled_temp_locs[spilled];
+                        *spilled = load_from_memory(self, &mut mnemonics, loc);
+                    }
+
+                    dst.iter()
+                        .filter(|t| spilled_temp_locs.contains_key(t))
+                        .map(|t| (spilled_temp_locs[t], *t))
+                        .collect()
+                }
+                Mnemonic::Move { dst, src, .. } => {
+                    if let Some(loc) = spilled_temp_locs.get(src) {
+                        *src = load_from_memory(self, &mut mnemonics, *loc);
+                    }
+
+                    if let Some(loc) = spilled_temp_locs.get(dst) {
+                        vec![(*loc, *dst)]
+                    } else {
+                        vec![]
+                    }
+                }
+                _ => vec![],
+            };
+
+            mnemonics.push(mnemonic);
+
+            for (loc, temp) in locs {
+                save_to_memory(self, &mut mnemonics, loc, temp);
+            }
+        }
+
+        func.mnemonics = mnemonics;
+        func
     }
 
     fn gen_all(&mut self, module: Module) -> String {

@@ -167,8 +167,48 @@ fn gen_liveness(bbs: &[BasicBlock], graph: &Graph<usize>) -> Vec<Vec<Liveness>> 
     livenesses
 }
 
+fn calc_spill_priority(bbs: &[BasicBlock], igraph: &InterferenceGraph) -> FxHashMap<Temp, f32> {
+    let mut priority = FxHashMap::default();
+    let mut def_use_count: FxHashMap<Temp, u32> = FxHashMap::default();
+
+    for bb in bbs {
+        for mnemonic in &bb.mnemonics {
+            match mnemonic {
+                Mnemonic::Op { dst, src, .. } | Mnemonic::Jump { dst, src, .. } => {
+                    for dst in dst {
+                        *def_use_count.entry(*dst).or_insert(0) += 1;
+                    }
+                    for src in src {
+                        *def_use_count.entry(*src).or_insert(0) += 1;
+                    }
+                }
+                Mnemonic::Move { dst, src, .. } => {
+                    *def_use_count.entry(*dst).or_insert(0) += 1;
+                    *def_use_count.entry(*src).or_insert(0) += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    for (temp, count) in def_use_count {
+        let mut degree = igraph.adjacent(&temp).count() as f32;
+        if degree <= 0.0 {
+            // Avoid zero division
+            degree = 1.0;
+        }
+
+        let value = count as f32 / degree;
+        priority.insert(temp, value);
+    }
+
+    priority
+}
+
 // interference graph
-pub fn calc_igraph(mnemonics: Vec<Mnemonic>) -> (Vec<BasicBlock>, InterferenceGraph) {
+pub fn calc_igraph(
+    mnemonics: Vec<Mnemonic>,
+) -> (Vec<BasicBlock>, InterferenceGraph, FxHashMap<Temp, f32>) {
     let mut bbs = generate_bb(mnemonics);
 
     let graph = gen_dataflow(&bbs);
@@ -231,13 +271,20 @@ pub fn calc_igraph(mnemonics: Vec<Mnemonic>) -> (Vec<BasicBlock>, InterferenceGr
         }
     }
 
-    // dump_igraph(&bbs, &livenesses, &igraph);
+    let priority = calc_spill_priority(&bbs, &igraph);
 
-    (bbs, igraph)
+    // dump_igraph(&bbs, &livenesses, &igraph, &priority);
+
+    (bbs, igraph, priority)
 }
 
 #[allow(dead_code)]
-fn dump_igraph(bbs: &[BasicBlock], livenesses: &Vec<Vec<Liveness>>, igraph: &Graph<Temp>) {
+fn dump_igraph(
+    bbs: &[BasicBlock],
+    livenesses: &Vec<Vec<Liveness>>,
+    igraph: &Graph<Temp>,
+    spill_priority: &FxHashMap<Temp, f32>,
+) {
     use crate::codegen::format_mnemonic;
     use crate::dump::format_iter;
     use crate::x64codegen::reg64_name;
@@ -288,5 +335,13 @@ fn dump_igraph(bbs: &[BasicBlock], livenesses: &Vec<Vec<Liveness>>, igraph: &Gra
                 ","
             )
         );
+    }
+
+    println!("============================");
+
+    // Print spill priority
+
+    for (temp, priority) in spill_priority {
+        println!("{}\t{}", temp_name(*temp), priority);
     }
 }

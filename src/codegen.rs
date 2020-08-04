@@ -29,6 +29,7 @@ pub enum Mnemonic {
 pub struct Function {
     pub name: Id,
     pub mnemonics: Vec<Mnemonic>,
+    pub stack_size: usize,
     pub is_private: bool,
 }
 
@@ -41,6 +42,7 @@ pub struct Module {
 
 pub trait CodeGen {
     fn codegen(&mut self, ir_module: IRModule) -> Module;
+    fn spill(&mut self, func: Function, spilled_temps: &[Temp]) -> Function;
     fn gen_all(&mut self, module: Module) -> String;
 }
 

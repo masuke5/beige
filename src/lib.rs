@@ -259,6 +259,7 @@ pub fn compile(option: CompileOption) {
     for func in module.functions {
         functions.push(regalloc::regalloc(
             func,
+            &mut *codegen,
             registers.clone(),
             priority.clone(),
         ));
