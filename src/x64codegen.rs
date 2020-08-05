@@ -5,6 +5,7 @@ use crate::ir::{
 use crate::token;
 use lazy_static::lazy_static;
 use rustc_hash::FxHashMap;
+use std::iter;
 
 fn escape_str(s: &str) -> String {
     token::escape_str(s)
@@ -403,11 +404,17 @@ impl X64CodeGen {
         }
     }
 
-    fn gen_prologue(&mut self, ms: &mut Vec<Mnemonic>, params: Vec<Temp>, stack_size: usize) {
+    fn gen_prologue(
+        &mut self,
+        ms: &mut Vec<Mnemonic>,
+        params: Vec<Temp>,
+        stack_size: usize,
+    ) -> Vec<Temp> {
         // push rbp
         // mov rbp, rsp
         // sub rsp, stack_size
 
+        // Allocate stack frame
         if stack_size != 0 {
             ms.push(Mnemonic::Op {
                 text: "push $s0".to_string(),
@@ -422,16 +429,37 @@ impl X64CodeGen {
             });
         }
 
+        // Save callee save registers
+        let saved_temps: Vec<Temp> = iter::repeat_with(|| Temp::new())
+            .take(CALLEE_SAVES.len())
+            .collect();
+        for (temp, reg) in saved_temps.iter().zip(&*CALLEE_SAVES) {
+            self.gen_stmt(ms, Stmt::Expr(*temp, Expr::Temp(*reg)));
+        }
+
         for (param, reg) in params.into_iter().zip(ARG_REGS.iter()) {
             self.gen_stmt(ms, Stmt::Expr(param, Expr::Temp(*reg)));
         }
+
+        saved_temps
     }
 
-    fn gen_epilogue(&mut self, ms: &mut Vec<Mnemonic>, epilogue_label: Label, stack_size: usize) {
+    fn gen_epilogue(
+        &mut self,
+        ms: &mut Vec<Mnemonic>,
+        epilogue_label: Label,
+        stack_size: usize,
+        saved_temps: Vec<Temp>,
+    ) {
         ms.push(Self::gen_label(epilogue_label));
 
         // mov rsp, rbp
         // pop rbp
+
+        // Restore callee save registers
+        for (temp, reg) in saved_temps.iter().zip(&*CALLEE_SAVES) {
+            self.gen_stmt(ms, Stmt::Expr(*reg, Expr::Temp(*temp)));
+        }
 
         if stack_size != 0 {
             self.gen_stmt(ms, Stmt::Expr(*RSP, Expr::Temp(*RBP)));
@@ -442,13 +470,10 @@ impl X64CodeGen {
             });
         }
 
-        let mut src = vec![*RAX, *RBP, *RSP];
-        src.extend(&*CALLEE_SAVES);
-
         ms.push(Mnemonic::Op {
             text: "ret".to_string(),
             dst: vec![],
-            src,
+            src: vec![*RBP, *RSP],
         });
     }
 
@@ -456,7 +481,7 @@ impl X64CodeGen {
         let mut mnemonics = Vec::new();
 
         self.epilogue_label = Some(Label::new());
-        self.gen_prologue(&mut mnemonics, ir_func.params, ir_func.stack_size);
+        let saved_temps = self.gen_prologue(&mut mnemonics, ir_func.params, ir_func.stack_size);
 
         let labels: Vec<Option<Label>> = ir_func.bbs.iter().map(|bb| bb.label).collect();
 
@@ -476,6 +501,7 @@ impl X64CodeGen {
             &mut mnemonics,
             self.epilogue_label.unwrap(),
             ir_func.stack_size,
+            saved_temps,
         );
         self.epilogue_label = None;
 
