@@ -1,11 +1,13 @@
 use crate::codegen::{format_mnemonic, CodeGen, Function, Mnemonic, Module};
-use crate::ir::{Cmp, Expr, Function as IRFunction, Label, Module as IRModule, Stmt, Temp};
+use crate::ir::{
+    Cmp, Expr, Function as IRFunction, Label, Module as IRModule, Stmt, Temp, TEMP_FP,
+};
 use lazy_static::lazy_static;
 use rustc_hash::FxHashMap;
 use std::iter;
 
 // Adjust depending on the purpose of debugging
-const REG_COUNT: usize = 3; // it must be at least 3
+const REG_COUNT: usize = 5; // it must be at least 5
 
 lazy_static! {
     // return value = R0
@@ -13,13 +15,15 @@ lazy_static! {
     pub static ref R0: Temp = Temp::new();
     pub static ref R1: Temp = Temp::new();
     pub static ref R2: Temp = Temp::new();
+    pub static ref R3: Temp = Temp::new();
     pub static ref REGISTERS: Vec<Temp> = {
-        let mut regs = vec![*R0, *R1, *R2];
+        let mut regs = vec![*R0, *R1, *R2, *R3];
         regs.extend(iter::repeat_with(|| Temp::new()).take(REG_COUNT - regs.len()));
         regs
     };
     pub static ref REG_PRIORITY: Vec<u32> = (0..REG_COUNT).map(|n| n as u32).rev().collect();
     pub static ref RV: Temp = *R0;
+    pub static ref SP: Temp = *R3;
     pub static ref PARAMS: [Temp; 3] = [*R0, *R1, *R2];
 }
 
@@ -62,7 +66,7 @@ impl DebugCodeGen {
 
     fn gen_expr(&mut self, ms: &mut Vec<Mnemonic>, expr: Expr) -> Temp {
         match expr {
-            // Expr::Temp(temp) if temp == *TEMP_FP => *R?,
+            Expr::Temp(temp) if temp == *TEMP_FP => *SP,
             Expr::Temp(temp) => temp,
             Expr::Int(n) => result(|t| {
                 ms.push(Mnemonic::Op {
@@ -175,6 +179,15 @@ impl DebugCodeGen {
                     src: vec![expr],
                 })
             }),
+            Expr::Load(box Expr::Sub(box Expr::Temp(fp), box Expr::Int(loc))) if fp == *TEMP_FP => {
+                result(|t| {
+                    ms.push(Mnemonic::Op {
+                        text: format!("load $d0, [$s0, {}]", loc),
+                        dst: vec![t],
+                        src: vec![*SP],
+                    })
+                })
+            }
             Expr::Load(expr) => result(|t| {
                 let expr = self.gen_expr(ms, *expr);
                 ms.push(Mnemonic::Op {
@@ -268,6 +281,16 @@ impl DebugCodeGen {
                     src,
                 });
             }
+            Stmt::Store(Expr::Sub(box Expr::Temp(fp), box Expr::Int(loc)), expr)
+                if fp == *TEMP_FP =>
+            {
+                let expr = self.gen_expr(ms, expr);
+                ms.push(Mnemonic::Op {
+                    text: format!("store [$s0, {}], $s1", loc),
+                    dst: vec![],
+                    src: vec![*SP, expr],
+                })
+            }
             Stmt::Store(addr, expr) => {
                 let addr = self.gen_expr(ms, addr);
                 let expr = self.gen_expr(ms, expr);
@@ -310,24 +333,60 @@ impl DebugCodeGen {
         }
     }
 
-    fn gen_prologue(&mut self, ms: &mut Vec<Mnemonic>, params: Vec<Temp>, stack_size: usize) {
+    fn gen_prologue(
+        &mut self,
+        ms: &mut Vec<Mnemonic>,
+        params: Vec<Temp>,
+        stack_size: usize,
+    ) -> Option<Temp> {
         if params.len() > 3 {
             panic!("unsupported more than 3 arguments")
         }
 
-        ms.push(Mnemonic::Op {
-            text: format!("alloc_frame {}", stack_size),
-            dst: vec![],
-            src: vec![],
-        });
+        let temp_saved_sp = if stack_size > 0 {
+            self.gen_stmt(
+                ms,
+                Stmt::Expr(
+                    *SP,
+                    Expr::Sub(box Expr::Temp(*SP), box Expr::Int(stack_size as i64)),
+                ),
+            );
+            None
+        } else {
+            let t = Temp::new();
+            self.gen_stmt(ms, Stmt::Expr(t, Expr::Temp(*SP)));
+            Some(t)
+        };
 
         for (param, reg) in params.into_iter().zip(&*REGISTERS) {
             self.gen_stmt(ms, Stmt::Expr(param, Expr::Temp(*reg)));
         }
+
+        temp_saved_sp
     }
 
-    fn gen_epilogue(&mut self, ms: &mut Vec<Mnemonic>) {
+    fn gen_epilogue(
+        &mut self,
+        ms: &mut Vec<Mnemonic>,
+        stack_size: usize,
+        temp_saved_sp: Option<Temp>,
+    ) {
         self.gen_stmt(ms, Stmt::Label(self.epilogue_label.unwrap()));
+
+        if stack_size > 0 {
+            self.gen_stmt(
+                ms,
+                Stmt::Expr(
+                    *SP,
+                    Expr::Add(box Expr::Temp(*SP), box Expr::Int(stack_size as i64)),
+                ),
+            );
+        }
+
+        if let Some(temp_saved_sp) = temp_saved_sp {
+            self.gen_stmt(ms, Stmt::Expr(*SP, Expr::Temp(temp_saved_sp)));
+        }
+
         ms.push(Mnemonic::Op {
             text: "ret".to_string(),
             dst: vec![],
@@ -339,7 +398,7 @@ impl DebugCodeGen {
         let mut mnemonics = Vec::new();
 
         self.epilogue_label = Some(Label::new());
-        self.gen_prologue(&mut mnemonics, ir_func.params, ir_func.stack_size);
+        let temp_saved_sp = self.gen_prologue(&mut mnemonics, ir_func.params, ir_func.stack_size);
 
         let labels: Vec<Option<Label>> = ir_func.bbs.iter().map(|bb| bb.label).collect();
 
@@ -355,7 +414,7 @@ impl DebugCodeGen {
             }
         }
 
-        self.gen_epilogue(&mut mnemonics);
+        self.gen_epilogue(&mut mnemonics, ir_func.stack_size, temp_saved_sp);
         self.epilogue_label = None;
 
         Function {
@@ -381,8 +440,6 @@ impl CodeGen for DebugCodeGen {
     }
 
     fn spill(&mut self, mut func: Function, spilled_temps: &[Temp]) -> Function {
-        use crate::ir::TEMP_FP;
-
         fn load_from_memory(slf: &mut DebugCodeGen, ms: &mut Vec<Mnemonic>, loc: usize) -> Temp {
             let t = Temp::new();
             slf.gen_stmt(

@@ -75,7 +75,7 @@ pub fn regalloc(
     registers: FxHashSet<Temp>,
     priority: FxHashMap<Temp, u32>,
 ) -> Function {
-    debug!("Alloc register in function `{}`", func.name);
+    debug!("Allocate registers in function `{}`", func.name);
 
     let func_for_spill = func.clone();
 

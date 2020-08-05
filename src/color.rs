@@ -275,9 +275,7 @@ struct Color {
     spill_priority: FxHashMap<Temp, f32>,
     colored_temps: FxHashMap<Temp, Temp>,
     spilled_temps: Vec<Temp>,
-    freeze_worklist: Vec<(Temp, Temp)>,
     coalesce_worklist: FxHashSet<(Temp, Temp)>,
-    spill_worklist: Vec<(Temp, Temp)>,
 }
 
 impl Color {
@@ -297,9 +295,7 @@ impl Color {
             registers,
             register_priority,
             spill_priority,
-            freeze_worklist: Vec::new(),
             coalesce_worklist: FxHashSet::default(),
-            spill_worklist: Vec::new(),
         }
     }
 
@@ -333,6 +329,17 @@ impl Color {
                     }
                 }
             }
+        }
+
+        // Remove from coalesce worklist
+        let moves: Vec<(Temp, Temp)> = self
+            .coalesce_worklist
+            .iter()
+            .filter(|(a, b)| *a == temp || *b == temp)
+            .copied()
+            .collect();
+        for mov in moves {
+            self.coalesce_worklist.remove(&mov);
         }
 
         self.graph.remove(temp);
@@ -478,9 +485,10 @@ impl Color {
         for (temp, reg) in &self.graph.aliases {
             if self.is_precolored(*reg) {
                 self.colored_temps.insert(*temp, *reg);
-            } else {
-                let reg = self.colored_temps[reg];
+            } else if let Some(reg) = self.colored_temps.get(reg).copied() {
                 self.colored_temps.insert(*temp, reg);
+            } else {
+                // If temp is spilled
             }
         }
     }
