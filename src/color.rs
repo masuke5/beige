@@ -7,8 +7,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Reverse;
 use std::mem;
 
-// TODO: 効率の良い実装
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ColorResult {
     Spilled(Vec<Temp>),
@@ -320,9 +318,12 @@ impl Color {
         for x in self.graph.adjacent(temp) {
             if self.graph.degree(x) <= self.registers.len() {
                 for y in self.graph.move_adjacent(x) {
+                    // If both x and y are not precolored and the move is not contained by
+                    // coalesce worklist and x and y are not interference
                     if (!self.is_precolored(x) || !self.is_precolored(y))
                         && (!self.coalesce_worklist.contains(&(x, y))
                             && !self.coalesce_worklist.contains(&(y, x)))
+                        && !self.graph.is_interference(x, y)
                     {
                         debug!("Enable move ({}, {})", reg_name(x), reg_name(y));
                         self.coalesce_worklist.insert((x, y));
