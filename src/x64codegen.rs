@@ -94,6 +94,51 @@ impl X64CodeGen {
         }
     }
 
+    fn gen_effective_address(
+        &mut self,
+        ms: &mut Vec<Mnemonic>,
+        src: &mut Vec<Temp>,
+        expr: &Expr,
+    ) -> Option<String> {
+        match expr {
+            Expr::Int(n) => Some(format!("{}", n)),
+            Expr::Temp(temp) if *temp == *TEMP_FP => {
+                self.gen_effective_address(ms, src, &Expr::Temp(*RBP))
+            }
+            Expr::Temp(temp) => {
+                src.push(*temp);
+                Some(format!("$s{}", src.len() - 1))
+            }
+            Expr::Addr(label) => Some(format!("{}", label_name(*label))),
+            Expr::Add(lhs, rhs) => {
+                let lhs = self.gen_effective_address(ms, src, &lhs)?;
+                let rhs = self.gen_effective_address(ms, src, &rhs)?;
+                Some(format!("{} + {}", lhs, rhs))
+            }
+            Expr::Sub(lhs, rhs) => {
+                let lhs = self.gen_effective_address(ms, src, &lhs)?;
+                let rhs = self.gen_effective_address(ms, src, &rhs)?;
+                Some(format!("{} - {}", lhs, rhs))
+            }
+            Expr::Mul(lhs, rhs) => {
+                let lhs = self.gen_effective_address(ms, src, &lhs)?;
+                let rhs = self.gen_effective_address(ms, src, &rhs)?;
+                Some(format!("{} * {}", lhs, rhs))
+            }
+            Expr::Div(lhs, rhs) => {
+                let lhs = self.gen_effective_address(ms, src, &lhs)?;
+                let rhs = self.gen_effective_address(ms, src, &rhs)?;
+                Some(format!("{} / {}", lhs, rhs))
+            }
+            // Eject expressions that have side effects
+            Expr::Call(..) | Expr::CCall(..) => {
+                let temp = self.gen_expr(ms, expr.clone());
+                self.gen_effective_address(ms, src, &Expr::Temp(temp))
+            }
+            _ => None,
+        }
+    }
+
     fn gen_expr(&mut self, ms: &mut Vec<Mnemonic>, expr: Expr) -> Temp {
         match expr {
             Expr::Temp(temp) if temp == *TEMP_FP => *RBP,
@@ -205,22 +250,29 @@ impl X64CodeGen {
                     src: vec![],
                 })
             }),
-            Expr::Load(box Expr::Sub(box Expr::Temp(fp), box Expr::Int(loc))) if fp == *TEMP_FP => {
-                result(|dst| {
-                    ms.push(Mnemonic::Op {
-                        text: format!("mov $d0, [$s0 - {}]", loc),
-                        dst: vec![dst],
-                        src: vec![*RBP],
-                    });
-                })
-            }
             Expr::Load(addr) => result(|dst| {
-                let addr = self.gen_expr(ms, *addr);
-                ms.push(Mnemonic::Op {
-                    text: "mov $d0, [$s0]".to_string(),
-                    dst: vec![dst],
-                    src: vec![addr],
-                });
+                let mut src = Vec::new();
+                let mut ms_to_add = Vec::new();
+                let text = self.gen_effective_address(&mut ms_to_add, &mut src, &addr);
+
+                match text {
+                    Some(text) => {
+                        ms.append(&mut ms_to_add);
+                        ms.push(Mnemonic::Op {
+                            text: format!("mov $d0, [{}]", text),
+                            dst: vec![dst],
+                            src,
+                        });
+                    }
+                    None => {
+                        let addr = self.gen_expr(ms, *addr);
+                        ms.push(Mnemonic::Op {
+                            text: "mov $d0, [$s0]".to_string(),
+                            dst: vec![dst],
+                            src: vec![addr],
+                        });
+                    }
+                }
             }),
             Expr::CCall(func, args) | Expr::Call(box Expr::Func(None, func), args) => {
                 result(|dst| {
@@ -267,23 +319,6 @@ impl X64CodeGen {
                     src: vec![],
                 });
             }
-            Stmt::Expr(dst, Expr::Load(box Expr::Sub(box Expr::Temp(fp), box Expr::Int(loc))))
-                if fp == *TEMP_FP =>
-            {
-                ms.push(Mnemonic::Op {
-                    text: format!("mov $d0, [$s0 - {}]", loc),
-                    dst: vec![dst],
-                    src: vec![*RBP],
-                });
-            }
-            Stmt::Expr(dst, Expr::Load(addr)) => {
-                let addr = self.gen_expr(ms, *addr);
-                ms.push(Mnemonic::Op {
-                    text: "mov $d0, [$s0]".to_string(),
-                    dst: vec![dst],
-                    src: vec![addr],
-                });
-            }
             Stmt::Expr(dst, expr) => {
                 let expr = self.gen_expr(ms, expr);
                 ms.push(Mnemonic::Move {
@@ -292,24 +327,31 @@ impl X64CodeGen {
                     src: expr,
                 });
             }
-            Stmt::Store(Expr::Sub(box Expr::Temp(fp), box Expr::Int(loc)), expr)
-                if fp == *TEMP_FP =>
-            {
-                let expr = self.gen_expr(ms, expr);
-                ms.push(Mnemonic::Op {
-                    text: format!("mov [$s0 - {}], $s1", loc),
-                    dst: vec![],
-                    src: vec![*RBP, expr],
-                })
-            }
             Stmt::Store(addr, expr) => {
-                let addr = self.gen_expr(ms, addr);
                 let expr = self.gen_expr(ms, expr);
-                ms.push(Mnemonic::Op {
-                    text: "mov [$s0], $s1".to_string(),
-                    dst: vec![],
-                    src: vec![addr, expr],
-                })
+
+                let mut src = vec![expr];
+                let mut ms_to_add = Vec::new();
+                let text = self.gen_effective_address(&mut ms_to_add, &mut src, &addr);
+
+                match text {
+                    Some(text) => {
+                        ms.append(&mut ms_to_add);
+                        ms.push(Mnemonic::Op {
+                            text: format!("mov [{}], $s0", text),
+                            dst: vec![],
+                            src,
+                        });
+                    }
+                    None => {
+                        let addr = self.gen_expr(ms, addr);
+                        ms.push(Mnemonic::Op {
+                            text: "mov [$s0], $s1".to_string(),
+                            dst: vec![],
+                            src: vec![addr, expr],
+                        })
+                    }
+                }
             }
             Stmt::JumpIf(cmp, lhs, rhs, label) => {
                 let opcode = match cmp {
@@ -320,6 +362,35 @@ impl X64CodeGen {
                 };
 
                 match (lhs, rhs) {
+                    (Expr::Load(addr), rhs) => {
+                        let mut src = Vec::new();
+                        let mut ms_to_add = Vec::new();
+                        let text = self.gen_effective_address(&mut ms_to_add, &mut src, &addr);
+
+                        match text {
+                            Some(text) => {
+                                ms.append(&mut ms_to_add);
+
+                                let rhs = self.gen_expr(ms, rhs);
+                                src.push(rhs);
+
+                                ms.push(Mnemonic::Op {
+                                    text: format!("cmp [{}], $s{}", text, src.len() - 1),
+                                    dst: vec![],
+                                    src,
+                                });
+                            }
+                            None => {
+                                let addr = self.gen_expr(ms, *addr);
+                                let rhs = self.gen_expr(ms, rhs);
+                                ms.push(Mnemonic::Op {
+                                    text: "cmp [$s0], $s1".to_string(),
+                                    dst: vec![],
+                                    src: vec![addr, rhs],
+                                });
+                            }
+                        }
+                    }
                     (lhs, Expr::Int(n)) => {
                         let lhs = self.gen_expr(ms, lhs);
                         ms.push(Mnemonic::Op {
@@ -328,43 +399,31 @@ impl X64CodeGen {
                             src: vec![lhs],
                         });
                     }
-                    (lhs, Expr::Load(box Expr::Sub(box Expr::Temp(fp), box Expr::Int(loc))))
-                        if fp == *TEMP_FP =>
-                    {
-                        let lhs = self.gen_expr(ms, lhs);
-                        ms.push(Mnemonic::Op {
-                            text: format!("cmp $s0, [$s1 - {}]", loc),
-                            dst: vec![],
-                            src: vec![lhs, *RBP],
-                        });
-                    }
                     (lhs, Expr::Load(addr)) => {
                         let lhs = self.gen_expr(ms, lhs);
-                        let addr = self.gen_expr(ms, *addr);
-                        ms.push(Mnemonic::Op {
-                            text: "cmp $s0, [$s1]".to_string(),
-                            dst: vec![],
-                            src: vec![lhs, addr],
-                        });
-                    }
-                    (Expr::Load(box Expr::Sub(box Expr::Temp(fp), box Expr::Int(loc))), rhs)
-                        if fp == *TEMP_FP =>
-                    {
-                        let rhs = self.gen_expr(ms, rhs);
-                        ms.push(Mnemonic::Op {
-                            text: format!("cmp [$s0 - {}], $s1", loc),
-                            dst: vec![],
-                            src: vec![*RBP, rhs],
-                        });
-                    }
-                    (Expr::Load(addr), rhs) => {
-                        let rhs = self.gen_expr(ms, rhs);
-                        let addr = self.gen_expr(ms, *addr);
-                        ms.push(Mnemonic::Op {
-                            text: "cmp [$s0], $s1".to_string(),
-                            dst: vec![],
-                            src: vec![addr, rhs],
-                        });
+
+                        let mut src = vec![lhs];
+                        let mut ms_to_add = Vec::new();
+                        let text = self.gen_effective_address(&mut ms_to_add, &mut src, &addr);
+
+                        match text {
+                            Some(text) => {
+                                ms.append(&mut ms_to_add);
+                                ms.push(Mnemonic::Op {
+                                    text: format!("cmp $s0, [{}]", text),
+                                    dst: vec![],
+                                    src,
+                                });
+                            }
+                            None => {
+                                let addr = self.gen_expr(ms, *addr);
+                                ms.push(Mnemonic::Op {
+                                    text: "cmp $s0, [$s1]".to_string(),
+                                    dst: vec![],
+                                    src: vec![lhs, addr],
+                                });
+                            }
+                        }
                     }
                     (lhs, rhs) => {
                         let lhs = self.gen_expr(ms, lhs);
