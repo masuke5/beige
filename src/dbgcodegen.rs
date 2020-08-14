@@ -311,6 +311,8 @@ impl DebugCodeGen {
                 let opcode = match cmp {
                     Cmp::LessThan => "b.lt",
                     Cmp::LessThanOrEqual => "b.le",
+                    Cmp::GreaterThan => "b.gt",
+                    Cmp::GreaterThanOrEqual => "b.ge",
                     Cmp::Equal => "b.eq",
                     Cmp::NotEqual => "b.ne",
                 };

@@ -153,13 +153,13 @@ impl Generator {
                         let false_l = Label::new();
                         let end_l = Label::new();
 
-                        let (cmp, lhs, rhs) = match binop {
-                            BinOp::LessThan => (Cmp::LessThanOrEqual, rhs, lhs),
-                            BinOp::LessThanOrEqual => (Cmp::LessThan, rhs, lhs),
-                            BinOp::GreaterThan => (Cmp::LessThanOrEqual, lhs, rhs),
-                            BinOp::GreaterThanOrEqual => (Cmp::LessThanOrEqual, lhs, rhs),
-                            BinOp::Equal => (Cmp::NotEqual, lhs, rhs),
-                            BinOp::NotEqual => (Cmp::Equal, lhs, rhs),
+                        let cmp = match binop {
+                            BinOp::LessThan => Cmp::GreaterThanOrEqual,
+                            BinOp::LessThanOrEqual => Cmp::GreaterThan,
+                            BinOp::GreaterThan => Cmp::LessThanOrEqual,
+                            BinOp::GreaterThanOrEqual => Cmp::LessThan,
+                            BinOp::Equal => Cmp::NotEqual,
+                            BinOp::NotEqual => Cmp::Equal,
                             binop => panic!("unexpected binary operation `{:?}`", binop),
                         };
 
@@ -211,8 +211,38 @@ impl Generator {
                 let else_l = Label::new();
                 let end_l = Label::new();
 
-                let (cmp, lhs, rhs) = match cond {
-                    cond => {
+                let (cmp, lhs, rhs) = match cond.kind {
+                    AE::BinOp(BinOp::LessThan, lhs, rhs) => {
+                        let lhs = self.gen_expr(*lhs);
+                        let rhs = self.gen_expr(*rhs);
+                        (Cmp::GreaterThanOrEqual, lhs, rhs)
+                    }
+                    AE::BinOp(BinOp::LessThanOrEqual, lhs, rhs) => {
+                        let lhs = self.gen_expr(*lhs);
+                        let rhs = self.gen_expr(*rhs);
+                        (Cmp::GreaterThan, lhs, rhs)
+                    }
+                    AE::BinOp(BinOp::GreaterThan, lhs, rhs) => {
+                        let lhs = self.gen_expr(*lhs);
+                        let rhs = self.gen_expr(*rhs);
+                        (Cmp::LessThanOrEqual, lhs, rhs)
+                    }
+                    AE::BinOp(BinOp::GreaterThanOrEqual, lhs, rhs) => {
+                        let lhs = self.gen_expr(*lhs);
+                        let rhs = self.gen_expr(*rhs);
+                        (Cmp::LessThan, lhs, rhs)
+                    }
+                    AE::BinOp(BinOp::Equal, lhs, rhs) => {
+                        let lhs = self.gen_expr(*lhs);
+                        let rhs = self.gen_expr(*rhs);
+                        (Cmp::NotEqual, lhs, rhs)
+                    }
+                    AE::BinOp(BinOp::NotEqual, lhs, rhs) => {
+                        let lhs = self.gen_expr(*lhs);
+                        let rhs = self.gen_expr(*rhs);
+                        (Cmp::Equal, lhs, rhs)
+                    }
+                    _ => {
                         let cond = self.gen_expr(*cond);
                         (Cmp::Equal, cond, IE::Int(0))
                     }

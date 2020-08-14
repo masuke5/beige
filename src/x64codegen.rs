@@ -357,6 +357,8 @@ impl X64CodeGen {
                 let opcode = match cmp {
                     Cmp::LessThan => "jl",
                     Cmp::LessThanOrEqual => "jle",
+                    Cmp::GreaterThan => "jg",
+                    Cmp::GreaterThanOrEqual => "jge",
                     Cmp::Equal => "je",
                     Cmp::NotEqual => "jne",
                 };

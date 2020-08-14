@@ -59,6 +59,8 @@ lazy_static! {
 pub enum Cmp {
     LessThan,
     LessThanOrEqual,
+    GreaterThan,
+    GreaterThanOrEqual,
     Equal,
     NotEqual,
 }
@@ -68,6 +70,8 @@ impl fmt::Display for Cmp {
         match self {
             Self::LessThan => write!(f, "<"),
             Self::LessThanOrEqual => write!(f, "<="),
+            Self::GreaterThan => write!(f, "<"),
+            Self::GreaterThanOrEqual => write!(f, "<="),
             Self::Equal => write!(f, "="),
             Self::NotEqual => write!(f, "<>"),
         }
