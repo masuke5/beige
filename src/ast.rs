@@ -154,7 +154,7 @@ pub struct Module<T: Debug + PartialEq + Clone> {
     pub path: Id,
     pub constants: FxHashMap<Id, (Visibility, Expr<T>)>,
     pub types: FxHashMap<Id, (Visibility, TypeDef)>,
-    pub functions: FxHashMap<Id, (Visibility, Function<T>)>,
+    pub functions: Vec<(Visibility, Function<T>)>,
 }
 
 impl<T: Debug + PartialEq + Clone> Module<T> {
@@ -163,7 +163,7 @@ impl<T: Debug + PartialEq + Clone> Module<T> {
             path,
             constants: FxHashMap::default(),
             types: FxHashMap::default(),
-            functions: FxHashMap::default(),
+            functions: Vec::new(),
         }
     }
 }
@@ -319,9 +319,9 @@ pub fn dump_module<T: Debug + PartialEq + Clone + Display>(
         dump_type(&type_def.body, indent + 2, option);
     }
 
-    for (name, (visibility, func)) in &module.functions {
+    for (visibility, func) in &module.functions {
         print_indent(indent + 1);
-        print!("{}fn {}", visibility.as_str(), name);
+        print!("{}fn {}", visibility.as_str(), func.name);
         for param_name in &func.params {
             print!(" {}", param_name.value);
         }

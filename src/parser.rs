@@ -658,7 +658,7 @@ impl Parser {
                     None => return,
                 };
 
-                module.functions.insert(name, (visibility, func));
+                module.functions.push((visibility, func));
             }
             _ => {
                 error!(self.curr_span(), "expected const, type or fn");

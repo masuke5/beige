@@ -60,7 +60,13 @@ impl Generator {
         }
     }
 
-    fn create_func(&mut self, mut func: Function) {
+    fn create_module_func(&mut self, func: Function) {
+        let func_name = func.name;
+        self.funcs.insert(func_name, func);
+        self.scope_funcs.insert(func_name, func_name);
+    }
+
+    fn create_local_func(&mut self, mut func: Function) {
         let original_name = func.name;
         let new_func_name = IdMap::new_id(&format!("{}{}", self.prefix, func.name));
         func.name = new_func_name;
@@ -187,7 +193,7 @@ impl Generator {
             }
             AE::LetFun(_, func) => {
                 let func = self.gen_func(func, true);
-                self.create_func(func);
+                self.create_local_func(func);
 
                 IE::DSeq(vec![])
             }
@@ -348,6 +354,8 @@ impl Generator {
     fn gen(mut self, module: TypedModule) -> Module {
         let mut new_module = Module::new(module.path);
 
+        self.push_scope();
+
         for (name, (_, expr)) in module.constants {
             let expr = self.gen_expr(expr);
             let label = Label::new();
@@ -355,11 +363,15 @@ impl Generator {
             new_module.constants.insert(label, expr);
         }
 
-        for (_, (visibility, func)) in module.functions {
+        for (visibility, func) in module.functions {
             let func = self.gen_func(func, visibility == Visibility::Private);
+            self.create_module_func(func.clone());
             new_module.functions.insert(func.name, func);
         }
 
+        self.pop_scope();
+
+        // Add local functions to new_module
         for (_, func) in self.funcs {
             new_module.functions.insert(func.name, func);
         }
