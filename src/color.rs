@@ -439,6 +439,10 @@ impl Color {
     }
 
     fn select_spill(&mut self) {
+        if !self.coalesce_worklist.is_empty() {
+            return;
+        }
+
         let temp = match self
             .graph
             .iter()
