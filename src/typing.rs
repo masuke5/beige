@@ -3,6 +3,7 @@ use crate::id::{Id, IdMap};
 use crate::scope_map::ScopeMap;
 use crate::ty::{generate_arrow_type, unify, MetaMap, Type, TypeCon, TypeError, TypePool};
 use rustc_hash::FxHashMap;
+use std::iter;
 
 type AT = AstTypeKind;
 type T = Type;
@@ -243,31 +244,60 @@ impl Typing {
     fn infer_func(&mut self, func: UntypedFunction) -> Option<TypedFunction> {
         self.push_scope();
 
-        // Insert parameters as variables with meta type
-        let mut param_metavars = Vec::with_capacity(func.params.len());
-        for name in &func.params {
-            let meta = self.pool.new_meta();
-            self.vars.insert(name.value, T::Meta(meta));
-            param_metavars.push(meta);
+        // Get params and return type
+        let mut func_ty = self.vars.get(&func.name).unwrap();
+        let mut param_types = Vec::new();
+        while let Type::App(TypeCon::Arrow, types) = func_ty {
+            param_types.push(types[0].clone());
+            func_ty = &types[1];
         }
 
+        let return_ty = func_ty.clone();
+
+        // Insert parameters as variables
+        for (name, ty) in func.params.iter().zip(&param_types) {
+            self.vars.insert(name.value, ty.clone());
+        }
+
+        // Infer the function body
         let mut metas = FxHashMap::default();
-        let body = self.infer_expr(&mut metas, *func.body)?;
+        let mut body = self.infer_expr(&mut metas, *func.body)?;
 
         self.pop_scope();
 
-        // Get inferred parameter types
-        let mut param_types = Vec::with_capacity(func.params.len());
-        for (metavar, name) in param_metavars.into_iter().zip(func.params.iter()) {
-            let ty = match metas.get(&metavar) {
-                Some(ty) => ty.clone(),
-                None => {
-                    // TODO: generalize
-                    warn!(&name.span, "cannot infer type");
-                    T::App(C::Unit, vec![])
+        // Unify return type
+        try_unify!(self, &mut metas, body, return_ty);
+        let return_ty = body.ty.clone();
+
+        let func_ty = self.vars.get_mut(&func.name).unwrap();
+        match func_ty {
+            T::App(C::Arrow, ref mut types) => {
+                let mut func_ty = &mut types[1];
+                while let Type::App(TypeCon::Arrow, types) = func_ty {
+                    func_ty = &mut types[1];
                 }
-            };
-            param_types.push(ty);
+
+                *func_ty = return_ty;
+            }
+            _ => panic!(),
+        }
+
+        // Get inferred parameter types
+        for (name, param_ty) in func.params.iter().zip(&mut param_types) {
+            match param_ty {
+                T::Meta(metavar) => {
+                    let ty = match metas.get(&metavar) {
+                        Some(ty) => ty.clone(),
+                        None => {
+                            // TODO: generalize
+                            warn!(&name.span, "cannot infer type");
+                            T::App(C::Unit, vec![])
+                        }
+                    };
+                    *param_ty = ty;
+                }
+                _ => {}
+            }
         }
 
         Some(TypedFunction {
@@ -346,6 +376,15 @@ impl Typing {
                 self.vars.insert(name, expr.ty.clone());
                 new_module.constants.insert(name, (visibility, expr));
             }
+        }
+
+        // Insert function header
+        for (_, func) in &module.functions {
+            let params: Vec<Type> = iter::repeat_with(|| Type::Meta(self.pool.new_meta()))
+                .take(func.params.len())
+                .collect();
+            let ty = generate_arrow_type(&params, &Type::Meta(self.pool.new_meta()));
+            self.vars.insert(func.name, ty);
         }
 
         // Infer function

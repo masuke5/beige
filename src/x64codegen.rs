@@ -209,8 +209,10 @@ impl X64CodeGen {
             }),
             Expr::Div(lhs, rhs) => result(|dst| {
                 let lhs = self.gen_expr(ms, *lhs);
-                let rhs = self.gen_expr(ms, *rhs);
                 self.gen_stmt(ms, Stmt::Expr(*RAX, Expr::Temp(lhs)));
+                self.gen_stmt(ms, Stmt::Expr(*RDX, Expr::Int(0)));
+                let rhs = self.gen_expr(ms, *rhs);
+
                 ms.push(Mnemonic::Op {
                     text: "idiv $s0".to_string(),
                     dst: vec![*RAX, *RDX],

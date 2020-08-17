@@ -23,7 +23,7 @@ struct Generator {
     vars: ScopeMap<Id, Variable>,
     stack_sizes: Vec<usize>,
 
-    funcs: FxHashMap<Id, Function>,
+    funcs: FxHashMap<Id, Option<Function>>,
     scope_funcs: ScopeMap<Id, Id>,
     prefix: String,
 }
@@ -53,16 +53,21 @@ impl Generator {
         self.stack_sizes.pop();
     }
 
-    fn find_func_in_scope(&self, name: Id) -> Option<&Function> {
+    fn find_func_name_in_scope(&self, name: Id) -> Option<Id> {
         match self.scope_funcs.get(&name) {
-            Some(name) => Some(&self.funcs[name]),
+            Some(name) => Some(self.funcs[name].as_ref().map_or(*name, |func| func.name)),
             None => None,
         }
     }
 
+    fn create_func_header(&mut self, name: Id) {
+        self.funcs.insert(name, None);
+        self.scope_funcs.insert(name, name);
+    }
+
     fn create_module_func(&mut self, func: Function) {
         let func_name = func.name;
-        self.funcs.insert(func_name, func);
+        self.funcs.insert(func_name, Some(func));
         self.scope_funcs.insert(func_name, func_name);
     }
 
@@ -71,7 +76,7 @@ impl Generator {
         let new_func_name = IdMap::new_id(&format!("{}{}", self.prefix, func.name));
         func.name = new_func_name;
 
-        self.funcs.insert(new_func_name, func);
+        self.funcs.insert(new_func_name, Some(func));
         self.scope_funcs.insert(original_name, new_func_name);
     }
 
@@ -140,10 +145,13 @@ impl Generator {
                 }
             }
             AE::Variable(name) if self.scope_funcs.contains_key(&name) => {
-                let func = self.find_func_in_scope(name).unwrap();
-                IE::Func(None, func.name)
+                let name = self.find_func_name_in_scope(name).unwrap();
+                IE::Func(None, name)
             }
-            AE::Variable(_) => panic!("the symbol existence should be checked when typing"),
+            AE::Variable(name) => panic!(
+                "the symbol `{}` existence should be checked when typing",
+                name
+            ),
             AE::BinOp(binop, lhs, rhs) => {
                 let lhs = self.gen_expr(*lhs);
                 let rhs = self.gen_expr(*rhs);
@@ -363,16 +371,21 @@ impl Generator {
             new_module.constants.insert(label, expr);
         }
 
+        // Insert function headers
+        for (_, func) in &module.functions {
+            self.create_func_header(func.name);
+        }
+
         for (visibility, func) in module.functions {
             let func = self.gen_func(func, visibility == Visibility::Private);
             self.create_module_func(func.clone());
-            new_module.functions.insert(func.name, func);
         }
 
         self.pop_scope();
 
         // Add local functions to new_module
         for (_, func) in self.funcs {
+            let func = func.unwrap();
             new_module.functions.insert(func.name, func);
         }
 
