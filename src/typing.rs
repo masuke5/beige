@@ -120,18 +120,18 @@ impl Typing {
                 try_some_mut!(lhs, rhs);
 
                 let ty = match binop {
-                    BinOp::Add
-                    | BinOp::Sub
-                    | BinOp::Mul
-                    | BinOp::Div
-                    | BinOp::Mod
-                    | BinOp::LessThan
+                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                        try_unify!(self, metas, lhs, T::App(C::Int, vec![]));
+                        try_unify!(self, metas, rhs, T::App(C::Int, vec![]));
+                        T::App(C::Int, vec![])
+                    }
+                    BinOp::LessThan
                     | BinOp::LessThanOrEqual
                     | BinOp::GreaterThan
                     | BinOp::GreaterThanOrEqual => {
                         try_unify!(self, metas, lhs, T::App(C::Int, vec![]));
                         try_unify!(self, metas, rhs, T::App(C::Int, vec![]));
-                        T::App(C::Int, vec![])
+                        T::App(C::Bool, vec![])
                     }
                     BinOp::Equal | BinOp::NotEqual => {
                         try_unify!(self, metas, rhs, lhs.ty.clone());
@@ -153,7 +153,7 @@ impl Typing {
                 (TE::Let(name, Box::new(expr)), T::App(C::Unit, vec![]))
             }
             E::LetFun(name, func) => {
-                let func = self.infer_func(func)?;
+                let func = self.infer_func(func, None)?;
                 let ty = generate_arrow_type(&func.param_types, &func.body.ty);
                 self.vars.insert(name, ty);
 
@@ -241,18 +241,29 @@ impl Typing {
         Some(TypedExpr::with_ty(typed_expr, expr.span, ty))
     }
 
-    fn infer_func(&mut self, func: UntypedFunction) -> Option<TypedFunction> {
+    fn infer_func(
+        &mut self,
+        func: UntypedFunction,
+        func_ty: Option<Type>,
+    ) -> Option<TypedFunction> {
         self.push_scope();
 
+        let func_ty = func_ty.unwrap_or_else(|| {
+            let params: Vec<_> = iter::repeat_with(|| T::Meta(self.pool.new_meta()))
+                .take(func.params.len())
+                .collect();
+            generate_arrow_type(&params, &Type::Meta(self.pool.new_meta()))
+        });
+
         // Get params and return type
-        let mut func_ty = self.vars.get(&func.name).unwrap();
+        let mut func_ty_ref = &func_ty;
         let mut param_types = Vec::new();
-        while let Type::App(TypeCon::Arrow, types) = func_ty {
+        while let Type::App(TypeCon::Arrow, types) = func_ty_ref {
             param_types.push(types[0].clone());
-            func_ty = &types[1];
+            func_ty_ref = &types[1];
         }
 
-        let return_ty = func_ty.clone();
+        let return_ty = func_ty_ref.clone();
 
         // Insert parameters as variables
         for (name, ty) in func.params.iter().zip(&param_types) {
@@ -269,17 +280,18 @@ impl Typing {
         try_unify!(self, &mut metas, body, return_ty);
         let return_ty = body.ty.clone();
 
-        let func_ty = self.vars.get_mut(&func.name).unwrap();
-        match func_ty {
-            T::App(C::Arrow, ref mut types) => {
-                let mut func_ty = &mut types[1];
-                while let Type::App(TypeCon::Arrow, types) = func_ty {
-                    func_ty = &mut types[1];
-                }
+        if let Some(func_ty) = self.vars.get_mut(&func.name) {
+            match func_ty {
+                T::App(C::Arrow, ref mut types) => {
+                    let mut func_ty = &mut types[1];
+                    while let Type::App(TypeCon::Arrow, types) = func_ty {
+                        func_ty = &mut types[1];
+                    }
 
-                *func_ty = return_ty;
+                    *func_ty = return_ty;
+                }
+                _ => panic!(),
             }
-            _ => panic!(),
         }
 
         // Get inferred parameter types
@@ -389,7 +401,8 @@ impl Typing {
 
         // Infer function
         for (visibility, func) in module.functions {
-            if let Some(func) = self.infer_func(func) {
+            let func_ty = self.vars.get(&func.name).unwrap().clone();
+            if let Some(func) = self.infer_func(func, Some(func_ty)) {
                 if func.name == IdMap::new_id("main") && visibility != Visibility::Public {
                     error!(&func.params[0].span, "the main function must be public");
                 }
