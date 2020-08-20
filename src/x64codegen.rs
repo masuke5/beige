@@ -41,9 +41,9 @@ lazy_static! {
     static ref ARG_REGS: [Temp; 6] = [*RDI, *RSI, *RDX, *RCX, *R8, *R9];
     static ref CALLEE_SAVES: [Temp; 5] = [*RBX, *R12, *R13, *R14, *R15];
     static ref CALLER_SAVES: [Temp; 2] = [*R10, *R11];
-    // rax (return value), rbp, rsp + ARG_REGS + CALLER_SAVES
-    static ref CALL_DST: [Temp; 11] =
-        [*RAX, *RBP, *RSP, *RDI, *RSI, *RDX, *RCX, *R8, *R9, *R10, *R11];
+    // rax (return value) + ARG_REGS + CALLER_SAVES
+    static ref CALL_DST: [Temp; 9] =
+        [*RAX, *RDI, *RSI, *RDX, *RCX, *R8, *R9, *R10, *R11];
     pub static ref ALL_REGS: [Temp; 16] = [*RAX, *RBX, *RCX,*RDX, *RBP, *RSP, *RDI, *RSI, *R8, *R9, *R10, *R11, *R12, *R13, *R14, *R15];
 }
 
@@ -481,15 +481,17 @@ impl X64CodeGen {
         if stack_size != 0 {
             ms.push(Mnemonic::Op {
                 text: "push $s0".to_string(),
-                dst: vec![],
-                src: vec![*RBP],
+                dst: vec![*RSP],
+                src: vec![*RBP, *RSP],
             });
             self.gen_stmt(ms, Stmt::Expr(*RBP, Expr::Temp(*RSP)));
-            ms.push(Mnemonic::Op {
-                text: format!("sub $d0, {}", stack_size),
-                dst: vec![*RSP],
-                src: vec![],
-            });
+            self.gen_stmt(
+                ms,
+                Stmt::Expr(
+                    *RSP,
+                    Expr::Sub(box Expr::Temp(*RSP), box Expr::Int(stack_size as i64)),
+                ),
+            );
         }
 
         // Save callee save registers
@@ -528,15 +530,15 @@ impl X64CodeGen {
             self.gen_stmt(ms, Stmt::Expr(*RSP, Expr::Temp(*RBP)));
             ms.push(Mnemonic::Op {
                 text: "pop $d0".to_string(),
-                dst: vec![*RBP],
-                src: vec![],
+                dst: vec![*RBP, *RSP],
+                src: vec![*RSP],
             });
         }
 
         ms.push(Mnemonic::Op {
             text: "ret".to_string(),
             dst: vec![],
-            src: vec![*RBP, *RSP],
+            src: vec![*RBP, *RSP, *RAX],
         });
     }
 
@@ -619,6 +621,8 @@ impl CodeGen for X64CodeGen {
             );
         };
 
+        let prev_stack_size = func.stack_size;
+
         // Allocate variables to save spilled temporaries
         let mut spilled_temp_locs = FxHashMap::default();
         for temp in spilled_temps {
@@ -626,8 +630,26 @@ impl CodeGen for X64CodeGen {
             spilled_temp_locs.insert(*temp, func.stack_size);
         }
 
-        // Insert mnemonics for saving spilled temporaries
         let mut mnemonics = Vec::with_capacity(func.mnemonics.len());
+
+        // Allocate stack frame if necessary
+        if prev_stack_size <= 0 {
+            mnemonics.push(Mnemonic::Op {
+                text: "push $s0".to_string(),
+                dst: vec![*RSP],
+                src: vec![*RBP, *RSP],
+            });
+            self.gen_stmt(&mut mnemonics, Stmt::Expr(*RBP, Expr::Temp(*RSP)));
+            self.gen_stmt(
+                &mut mnemonics,
+                Stmt::Expr(
+                    *RSP,
+                    Expr::Sub(box Expr::Temp(*RSP), box Expr::Int(func.stack_size as i64)),
+                ),
+            );
+        }
+
+        // Insert mnemonics for saving spilled temporaries
         for mut mnemonic in func.mnemonics {
             let locs: Vec<(usize, Temp)> = match &mut mnemonic {
                 Mnemonic::Op { src, dst, .. } | Mnemonic::Jump { src, dst, .. } => {
@@ -661,6 +683,29 @@ impl CodeGen for X64CodeGen {
                 save_to_memory(self, &mut mnemonics, loc, temp);
             }
         }
+
+        // Remove ret to insert epilogue
+        assert!(match mnemonics.last() {
+            Some(Mnemonic::Op { text, .. }) if text == "ret" => true,
+            _ => false,
+        });
+        mnemonics.pop().unwrap();
+
+        // Restore stack frame if necessary
+        if prev_stack_size <= 0 {
+            self.gen_stmt(&mut mnemonics, Stmt::Expr(*RSP, Expr::Temp(*RBP)));
+            mnemonics.push(Mnemonic::Op {
+                text: "pop $d0".to_string(),
+                dst: vec![*RBP, *RSP],
+                src: vec![*RSP],
+            });
+        }
+
+        mnemonics.push(Mnemonic::Op {
+            text: "ret".to_string(),
+            dst: vec![],
+            src: vec![*RBP, *RSP, *RAX],
+        });
 
         func.mnemonics = mnemonics;
         func

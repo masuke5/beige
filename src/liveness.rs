@@ -226,6 +226,7 @@ pub fn calc_igraph(
     // Create interference graph
 
     let mut igraph = Graph::new();
+    let mut same_temps: FxHashMap<Temp, FxHashSet<Temp>> = FxHashMap::default();
 
     for (i, bb) in bbs.iter().enumerate() {
         if !livenesses[i].is_empty() {
@@ -242,6 +243,14 @@ pub fn calc_igraph(
             match mnemonic {
                 Mnemonic::Op { dst, .. } | Mnemonic::Jump { dst, .. } => {
                     for dst in dst {
+                        if let Some(same_temps) = same_temps.get_mut(dst) {
+                            same_temps.clear();
+                        }
+
+                        for temps in same_temps.values_mut() {
+                            temps.remove(dst);
+                        }
+
                         for out in &liveness.outs {
                             if !igraph.contains(dst) {
                                 igraph.insert(*dst);
@@ -254,12 +263,25 @@ pub fn calc_igraph(
                         }
                     }
                 }
-                Mnemonic::Move { dst, .. } => {
+                Mnemonic::Move { dst, src, .. } => {
+                    same_temps
+                        .entry(*src)
+                        .or_insert(FxHashSet::default())
+                        .insert(*dst);
+                    same_temps
+                        .entry(*dst)
+                        .or_insert(FxHashSet::default())
+                        .insert(*src);
+
                     if !igraph.contains(dst) {
                         igraph.insert(*dst);
                     }
 
                     for out in &liveness.outs {
+                        if same_temps[src].contains(out) {
+                            continue;
+                        }
+
                         if !igraph.contains(out) {
                             igraph.insert(*out);
                         }
@@ -273,7 +295,7 @@ pub fn calc_igraph(
 
     let priority = calc_spill_priority(&bbs, &igraph);
 
-    // dump_igraph(&bbs, &livenesses, &igraph, &priority);
+    dump_igraph(&bbs, &livenesses, &igraph, &priority);
 
     (bbs, igraph, priority)
 }

@@ -307,24 +307,28 @@ impl Color {
 
     fn can_coalesce(&self, a: Temp, b: Temp) -> bool {
         assert!(!self.is_precolored(a) || !self.is_precolored(b));
+        assert!(!self.graph.is_interference(a, b));
 
         self.graph
             .adjacent(a)
             .all(|adj| self.graph.is_interference(adj, b) || !self.is_significant_degree(adj))
     }
 
+    fn can_add_coalesce_worklist(&self, x: Temp, y: Temp) -> bool {
+        // If both x and y are not precolored and the move is not contained by
+        // coalesce worklist and x and y are not interference
+        (!self.is_precolored(x) || !self.is_precolored(y))
+            && !self.coalesce_worklist.contains(&(x, y))
+            && !self.coalesce_worklist.contains(&(y, x))
+            && !self.graph.is_interference(x, y)
+    }
+
     fn remove_temp(&mut self, temp: Temp) {
         // Enable moves related to nodes that won't be signficant degree
         for x in self.graph.adjacent(temp) {
-            if self.graph.degree(x) <= self.registers.len() {
+            if self.graph.degree(x) == self.registers.len() {
                 for y in self.graph.move_adjacent(x) {
-                    // If both x and y are not precolored and the move is not contained by
-                    // coalesce worklist and x and y are not interference
-                    if (!self.is_precolored(x) || !self.is_precolored(y))
-                        && (!self.coalesce_worklist.contains(&(x, y))
-                            && !self.coalesce_worklist.contains(&(y, x)))
-                        && !self.graph.is_interference(x, y)
-                    {
+                    if self.can_add_coalesce_worklist(x, y) {
                         debug!("Enable move ({}, {})", reg_name(x), reg_name(y));
                         self.coalesce_worklist.insert((x, y));
                     }
@@ -385,7 +389,7 @@ impl Color {
             let moves: Vec<(Temp, Temp)> = self
                 .coalesce_worklist
                 .iter()
-                .filter(|(a, b)| *a == y || *b == y)
+                .filter(|(a, b)| *a == y || *b == y || *a == x || *b == x)
                 .copied()
                 .collect();
             for (a, b) in moves {
@@ -396,14 +400,26 @@ impl Color {
                 let b = self.graph.alias(b);
                 assert_ne!(a, b);
 
-                if self.is_precolored(a) && self.is_precolored(b) {
-                    continue;
-                }
-
-                if !self.coalesce_worklist.contains(&(a, b))
-                    && !self.coalesce_worklist.contains(&(b, a))
-                {
+                if self.can_add_coalesce_worklist(a, b) {
                     self.coalesce_worklist.insert((a, b));
+                }
+            }
+
+            // Enable move related to x and y
+            // for temp in self.graph.move_adjacent(x) {
+            //     if self.can_add_coalesce_worklist(x, temp) {
+            //         debug!("Enable move ({}, {})", reg_name(x), reg_name(temp));
+            //         self.coalesce_worklist.remove(&(temp, x)); // Avoid to duplicate
+            //         self.coalesce_worklist.insert((x, temp));
+            //     }
+            // }
+
+            // Enable all moves
+            for (x, y) in self.graph.move_edges() {
+                if self.can_add_coalesce_worklist(x, y) {
+                    debug!("Enable move ({}, {})", reg_name(x), reg_name(y));
+                    self.coalesce_worklist.remove(&(y, x)); // Avoid to duplicate
+                    self.coalesce_worklist.insert((x, y));
                 }
             }
         } else {
@@ -465,12 +481,19 @@ impl Color {
 
     fn select_colors(&mut self) {
         while let Some(temp) = self.simplified_temps.pop() {
-            let mut ok_regs = self.registers.clone();
-            for adj in self.igraph.adjacent(&temp) {
-                let adj = self.graph.alias(*adj);
+            let mut adjacent: FxHashSet<Temp> = self.igraph.adjacent(&temp).copied().collect();
+            for coalesced in self.graph.coalesced_temps(temp) {
+                for adj in self.igraph.adjacent(&coalesced) {
+                    adjacent.insert(*adj);
+                }
+            }
 
-                if let Some(reg) = self.registers.get(&adj) {
-                    ok_regs.remove(reg);
+            let mut ok_regs = self.registers.clone();
+            for adj in adjacent {
+                let adj = self.graph.alias(adj);
+
+                if self.is_precolored(adj) {
+                    ok_regs.remove(&adj);
                 }
                 if let Some(reg) = self.colored_temps.get(&adj) {
                     ok_regs.remove(reg);
@@ -510,8 +533,7 @@ impl Color {
         self.coalesce_worklist = self
             .graph
             .move_edges()
-            .filter(|(a, b)| !self.is_precolored(*a) || !self.is_precolored(*b))
-            .filter(|(a, b)| !self.graph.is_interference(*a, *b))
+            .filter(|(a, b)| self.can_add_coalesce_worklist(*a, *b))
             .collect();
 
         while !self.is_completed() {
