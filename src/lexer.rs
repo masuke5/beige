@@ -229,6 +229,30 @@ impl Lexer {
         Some(token)
     }
 
+    fn skip_comment(&mut self) {
+        assert_eq!(self.current(), '#');
+        self.advance();
+
+        if self.current() == '#' {
+            // multi-line comment
+            self.advance();
+            while self.current() != '\0' {
+                if self.current() == '#' && self.next() == '#' {
+                    self.advance();
+                    self.advance();
+                    break;
+                }
+
+                self.advance();
+            }
+        } else {
+            // single-line comment
+            while self.current() != '\n' && self.current() != '\n' {
+                self.next();
+            }
+        }
+    }
+
     fn symbol(&mut self, kind: TokenKind) -> Option<TokenKind> {
         self.advance();
         Some(kind)
@@ -248,6 +272,10 @@ impl Lexer {
         type TK = TokenKind;
 
         match self.current() {
+            '#' => {
+                self.skip_comment();
+                None
+            }
             '0'..='9' => self.lex_number(),
             '"' => self.lex_string(),
             ch if Self::is_identifier(ch) => self.lex_identifier(),
