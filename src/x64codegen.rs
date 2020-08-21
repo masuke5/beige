@@ -11,8 +11,8 @@ fn escape_str(s: &str) -> String {
     token::escape_str(s)
 }
 
-fn result(gen: impl FnOnce(Temp)) -> Temp {
-    let temp = Temp::new();
+fn result(dst: Option<Temp>, gen: impl FnOnce(Temp)) -> Temp {
+    let temp = dst.unwrap_or_else(|| Temp::new());
     gen(temp);
     temp
 }
@@ -44,6 +44,9 @@ lazy_static! {
     // rax (return value) + ARG_REGS + CALLER_SAVES
     static ref CALL_DST: [Temp; 9] =
         [*RAX, *RDI, *RSI, *RDX, *RCX, *R8, *R9, *R10, *R11];
+    // rbp,rsp + ARG_REGS
+    static ref CALL_SRC: [Temp; 8] =
+        [*RBP, *RSP, *RDI, *RSI, *RDX, *RCX, *R8, *R9];
     pub static ref ALL_REGS: [Temp; 16] = [*RAX, *RBX, *RCX,*RDX, *RBP, *RSP, *RDI, *RSI, *R8, *R9, *R10, *R11, *R12, *R13, *R14, *R15];
 }
 
@@ -132,18 +135,28 @@ impl X64CodeGen {
             }
             // Eject expressions that have side effects
             Expr::Call(..) | Expr::CCall(..) => {
-                let temp = self.gen_expr(ms, expr.clone());
+                let temp = self.gen_expr(ms, expr.clone(), None);
                 self.gen_effective_address(ms, src, &Expr::Temp(temp))
             }
             _ => None,
         }
     }
 
-    fn gen_expr(&mut self, ms: &mut Vec<Mnemonic>, expr: Expr) -> Temp {
+    fn gen_expr(&mut self, ms: &mut Vec<Mnemonic>, expr: Expr, dst: Option<Temp>) -> Temp {
         match expr {
-            Expr::Temp(temp) if temp == *TEMP_FP => *RBP,
-            Expr::Temp(temp) => temp,
-            Expr::Int(n) => result(|dst| {
+            Expr::Temp(temp) if temp == *TEMP_FP => self.gen_expr(ms, Expr::Temp(*RBP), dst),
+            Expr::Temp(temp) if dst.is_none() => temp,
+            Expr::Temp(temp) if temp == dst.unwrap() => temp,
+            Expr::Temp(temp) => {
+                let dst = dst.unwrap();
+                ms.push(Mnemonic::Move {
+                    text: "mov $d0, $s0".to_string(),
+                    dst,
+                    src: temp,
+                });
+                dst
+            }
+            Expr::Int(n) => result(dst, |dst| {
                 ms.push(Mnemonic::Op {
                     text: format!("mov $d0, {}", n),
                     dst: vec![dst],
@@ -151,8 +164,8 @@ impl X64CodeGen {
                 })
             }),
             Expr::Float(..) => unimplemented!(), // わからない
-            Expr::Add(lhs, box Expr::Int(n)) => result(|dst| {
-                let lhs = self.gen_expr(ms, *lhs);
+            Expr::Add(lhs, box Expr::Int(n)) => result(dst, |dst| {
+                let lhs = self.gen_expr(ms, *lhs, None);
                 self.gen_stmt(ms, Stmt::Expr(dst, Expr::Temp(lhs)));
                 ms.push(Mnemonic::Op {
                     text: format!("add $d0, {}", n),
@@ -160,9 +173,9 @@ impl X64CodeGen {
                     src: vec![dst],
                 });
             }),
-            Expr::Add(lhs, rhs) => result(|dst| {
-                let lhs = self.gen_expr(ms, *lhs);
-                let rhs = self.gen_expr(ms, *rhs);
+            Expr::Add(lhs, rhs) => result(dst, |dst| {
+                let lhs = self.gen_expr(ms, *lhs, None);
+                let rhs = self.gen_expr(ms, *rhs, None);
                 self.gen_stmt(ms, Stmt::Expr(dst, Expr::Temp(lhs)));
                 ms.push(Mnemonic::Op {
                     text: "add $d0, $s0".to_string(),
@@ -170,8 +183,8 @@ impl X64CodeGen {
                     src: vec![rhs, dst],
                 });
             }),
-            Expr::Sub(lhs, box Expr::Int(n)) => result(|dst| {
-                let lhs = self.gen_expr(ms, *lhs);
+            Expr::Sub(lhs, box Expr::Int(n)) => result(dst, |dst| {
+                let lhs = self.gen_expr(ms, *lhs, None);
                 self.gen_stmt(ms, Stmt::Expr(dst, Expr::Temp(lhs)));
                 ms.push(Mnemonic::Op {
                     text: format!("sub $d0, {}", n),
@@ -179,9 +192,9 @@ impl X64CodeGen {
                     src: vec![dst],
                 });
             }),
-            Expr::Sub(lhs, rhs) => result(|dst| {
-                let lhs = self.gen_expr(ms, *lhs);
-                let rhs = self.gen_expr(ms, *rhs);
+            Expr::Sub(lhs, rhs) => result(dst, |dst| {
+                let lhs = self.gen_expr(ms, *lhs, None);
+                let rhs = self.gen_expr(ms, *rhs, None);
                 self.gen_stmt(ms, Stmt::Expr(dst, Expr::Temp(lhs)));
                 ms.push(Mnemonic::Op {
                     text: "sub $d0, $s0".to_string(),
@@ -189,17 +202,17 @@ impl X64CodeGen {
                     src: vec![rhs, dst],
                 });
             }),
-            Expr::Mul(lhs, box Expr::Int(n)) => result(|dst| {
-                let lhs = self.gen_expr(ms, *lhs);
+            Expr::Mul(lhs, box Expr::Int(n)) => result(dst, |dst| {
+                let lhs = self.gen_expr(ms, *lhs, None);
                 ms.push(Mnemonic::Op {
                     text: format!("imul $d0, $s0, {}", n),
                     dst: vec![dst],
                     src: vec![lhs],
                 });
             }),
-            Expr::Mul(lhs, rhs) => result(|dst| {
-                let lhs = self.gen_expr(ms, *lhs);
-                let rhs = self.gen_expr(ms, *rhs);
+            Expr::Mul(lhs, rhs) => result(dst, |dst| {
+                let lhs = self.gen_expr(ms, *lhs, None);
+                let rhs = self.gen_expr(ms, *rhs, None);
                 self.gen_stmt(ms, Stmt::Expr(dst, Expr::Temp(lhs)));
                 ms.push(Mnemonic::Op {
                     text: "imul $d0, $s0".to_string(),
@@ -207,11 +220,10 @@ impl X64CodeGen {
                     src: vec![rhs, dst],
                 });
             }),
-            Expr::Div(lhs, rhs) => result(|dst| {
-                let lhs = self.gen_expr(ms, *lhs);
-                self.gen_stmt(ms, Stmt::Expr(*RAX, Expr::Temp(lhs)));
+            Expr::Div(lhs, rhs) => result(dst, |dst| {
+                self.gen_expr(ms, *lhs, Some(*RAX));
                 self.gen_stmt(ms, Stmt::Expr(*RDX, Expr::Int(0)));
-                let rhs = self.gen_expr(ms, *rhs);
+                let rhs = self.gen_expr(ms, *rhs, None);
 
                 ms.push(Mnemonic::Op {
                     text: "idiv $s0".to_string(),
@@ -220,39 +232,37 @@ impl X64CodeGen {
                 });
                 self.gen_stmt(ms, Stmt::Expr(dst, Expr::Temp(*RAX)));
             }),
-            Expr::Not(expr) => result(|dst| {
-                let expr = self.gen_expr(ms, *expr);
-                self.gen_stmt(ms, Stmt::Expr(dst, Expr::Temp(expr)));
+            Expr::Not(expr) => result(dst, |dst| {
+                self.gen_expr(ms, *expr, Some(dst));
                 ms.push(Mnemonic::Op {
                     text: "not $d0".to_string(),
                     dst: vec![dst],
                     src: vec![dst],
                 });
             }),
-            Expr::Negative(expr) => result(|dst| {
-                let expr = self.gen_expr(ms, *expr);
-                self.gen_stmt(ms, Stmt::Expr(dst, Expr::Temp(expr)));
+            Expr::Negative(expr) => result(dst, |dst| {
+                self.gen_expr(ms, *expr, Some(dst));
                 ms.push(Mnemonic::Op {
                     text: "neg $d0".to_string(),
                     dst: vec![dst],
                     src: vec![dst],
                 });
             }),
-            Expr::Addr(label) => result(|dst| {
+            Expr::Addr(label) => result(dst, |dst| {
                 ms.push(Mnemonic::Op {
                     text: format!("lea $d0, {}", label_name(label)),
                     dst: vec![dst],
                     src: vec![],
                 });
             }),
-            Expr::Func(None, func) => result(|dst| {
+            Expr::Func(None, func) => result(dst, |dst| {
                 ms.push(Mnemonic::Op {
                     text: format!("lea $d0, {}", func),
                     dst: vec![dst],
                     src: vec![],
                 })
             }),
-            Expr::Load(addr) => result(|dst| {
+            Expr::Load(addr) => result(dst, |dst| {
                 let mut src = Vec::new();
                 let mut ms_to_add = Vec::new();
                 let text = self.gen_effective_address(&mut ms_to_add, &mut src, &addr);
@@ -267,7 +277,7 @@ impl X64CodeGen {
                         });
                     }
                     None => {
-                        let addr = self.gen_expr(ms, *addr);
+                        let addr = self.gen_expr(ms, *addr, None);
                         ms.push(Mnemonic::Op {
                             text: "mov $d0, [$s0]".to_string(),
                             dst: vec![dst],
@@ -277,24 +287,20 @@ impl X64CodeGen {
                 }
             }),
             Expr::CCall(func, args) | Expr::Call(box Expr::Func(None, func), args) => {
-                result(|dst| {
+                result(dst, |dst| {
                     // TODO: Add support of more than 6 arguments
                     if args.len() > 6 {
                         panic!("more than 6 arguments are unsupported");
                     }
 
-                    let mut src = vec![*RBP, *RSP];
-
                     for (arg, reg) in args.into_iter().zip(ARG_REGS.iter()) {
-                        let temp = self.gen_expr(ms, arg);
-                        self.gen_stmt(ms, Stmt::Expr(*reg, Expr::Temp(temp)));
-                        src.push(*reg);
+                        self.gen_expr(ms, arg, Some(*reg));
                     }
 
                     ms.push(Mnemonic::Op {
                         text: format!("call {}", func),
                         dst: CALL_DST.to_vec(),
-                        src,
+                        src: CALL_SRC.to_vec(),
                     });
 
                     self.gen_stmt(ms, Stmt::Expr(dst, Expr::Temp(*RAX)));
@@ -307,13 +313,6 @@ impl X64CodeGen {
 
     fn gen_stmt(&mut self, ms: &mut Vec<Mnemonic>, stmt: Stmt) {
         match stmt {
-            Stmt::Expr(dst, Expr::Temp(src)) => {
-                ms.push(Mnemonic::Move {
-                    text: "mov $d0, $s0".to_string(),
-                    dst,
-                    src,
-                });
-            }
             Stmt::Expr(dst, Expr::Int(n)) => {
                 ms.push(Mnemonic::Op {
                     text: format!("mov $d0, {}", n),
@@ -322,15 +321,10 @@ impl X64CodeGen {
                 });
             }
             Stmt::Expr(dst, expr) => {
-                let expr = self.gen_expr(ms, expr);
-                ms.push(Mnemonic::Move {
-                    text: "mov $d0, $s0".to_string(),
-                    dst,
-                    src: expr,
-                });
+                self.gen_expr(ms, expr, Some(dst));
             }
             Stmt::Store(addr, expr) => {
-                let expr = self.gen_expr(ms, expr);
+                let expr = self.gen_expr(ms, expr, None);
 
                 let mut src = vec![expr];
                 let mut ms_to_add = Vec::new();
@@ -346,7 +340,7 @@ impl X64CodeGen {
                         });
                     }
                     None => {
-                        let addr = self.gen_expr(ms, addr);
+                        let addr = self.gen_expr(ms, addr, None);
                         ms.push(Mnemonic::Op {
                             text: "mov [$s0], $s1".to_string(),
                             dst: vec![],
@@ -375,7 +369,7 @@ impl X64CodeGen {
                             Some(text) => {
                                 ms.append(&mut ms_to_add);
 
-                                let rhs = self.gen_expr(ms, rhs);
+                                let rhs = self.gen_expr(ms, rhs, None);
                                 src.push(rhs);
 
                                 ms.push(Mnemonic::Op {
@@ -385,8 +379,8 @@ impl X64CodeGen {
                                 });
                             }
                             None => {
-                                let addr = self.gen_expr(ms, *addr);
-                                let rhs = self.gen_expr(ms, rhs);
+                                let addr = self.gen_expr(ms, *addr, None);
+                                let rhs = self.gen_expr(ms, rhs, None);
                                 ms.push(Mnemonic::Op {
                                     text: "cmp [$s0], $s1".to_string(),
                                     dst: vec![],
@@ -396,7 +390,7 @@ impl X64CodeGen {
                         }
                     }
                     (lhs, Expr::Int(n)) => {
-                        let lhs = self.gen_expr(ms, lhs);
+                        let lhs = self.gen_expr(ms, lhs, None);
                         ms.push(Mnemonic::Op {
                             text: format!("cmp $s0, {}", n),
                             dst: vec![],
@@ -404,7 +398,7 @@ impl X64CodeGen {
                         });
                     }
                     (lhs, Expr::Load(addr)) => {
-                        let lhs = self.gen_expr(ms, lhs);
+                        let lhs = self.gen_expr(ms, lhs, None);
 
                         let mut src = vec![lhs];
                         let mut ms_to_add = Vec::new();
@@ -420,7 +414,7 @@ impl X64CodeGen {
                                 });
                             }
                             None => {
-                                let addr = self.gen_expr(ms, *addr);
+                                let addr = self.gen_expr(ms, *addr, None);
                                 ms.push(Mnemonic::Op {
                                     text: "cmp $s0, [$s1]".to_string(),
                                     dst: vec![],
@@ -430,8 +424,8 @@ impl X64CodeGen {
                         }
                     }
                     (lhs, rhs) => {
-                        let lhs = self.gen_expr(ms, lhs);
-                        let rhs = self.gen_expr(ms, rhs);
+                        let lhs = self.gen_expr(ms, lhs, None);
+                        let rhs = self.gen_expr(ms, rhs, None);
                         ms.push(Mnemonic::Op {
                             text: "cmp $s0, $s1".to_string(),
                             dst: vec![],
@@ -459,8 +453,7 @@ impl X64CodeGen {
                 jump: vec![label],
             }),
             Stmt::Return(expr) => {
-                let expr = self.gen_expr(ms, expr);
-                self.gen_stmt(ms, Stmt::Expr(*RAX, Expr::Temp(expr)));
+                self.gen_expr(ms, expr, Some(*RAX));
                 self.gen_stmt(ms, Stmt::Jump(self.epilogue_label.unwrap()));
             }
             Stmt::Label(..) => panic!("there is a label"),
@@ -631,26 +624,35 @@ impl CodeGen for X64CodeGen {
         }
 
         let mut mnemonics = Vec::with_capacity(func.mnemonics.len());
+        let mut func_mnemonics = func.mnemonics.into_iter();
 
-        // Allocate stack frame if necessary
-        if prev_stack_size <= 0 {
-            mnemonics.push(Mnemonic::Op {
-                text: "push $s0".to_string(),
-                dst: vec![*RSP],
-                src: vec![*RBP, *RSP],
+        // Remove mnemonics that allocate stack frame
+        if prev_stack_size > 0 && prev_stack_size != func.stack_size {
+            func_mnemonics.next().unwrap(); // push rbp
+            func_mnemonics.next().unwrap(); // mov rbp, rsp
+            let old_mnemonic = func_mnemonics.next().unwrap(); // sub rbp, N
+            assert!(match old_mnemonic {
+                Mnemonic::Op { text, .. } if text.starts_with("sub $d0, ") => true,
+                _ => false,
             });
-            self.gen_stmt(&mut mnemonics, Stmt::Expr(*RBP, Expr::Temp(*RSP)));
-            self.gen_stmt(
-                &mut mnemonics,
-                Stmt::Expr(
-                    *RSP,
-                    Expr::Sub(box Expr::Temp(*RSP), box Expr::Int(func.stack_size as i64)),
-                ),
-            );
         }
 
+        mnemonics.push(Mnemonic::Op {
+            text: "push $s0".to_string(),
+            dst: vec![*RSP],
+            src: vec![*RBP, *RSP],
+        });
+        self.gen_stmt(&mut mnemonics, Stmt::Expr(*RBP, Expr::Temp(*RSP)));
+        self.gen_stmt(
+            &mut mnemonics,
+            Stmt::Expr(
+                *RSP,
+                Expr::Sub(box Expr::Temp(*RSP), box Expr::Int(func.stack_size as i64)),
+            ),
+        );
+
         // Insert mnemonics for saving spilled temporaries
-        for mut mnemonic in func.mnemonics {
+        for mut mnemonic in func_mnemonics {
             let locs: Vec<(usize, Temp)> = match &mut mnemonic {
                 Mnemonic::Op { src, dst, .. } | Mnemonic::Jump { src, dst, .. } => {
                     for spilled in src.iter_mut().filter(|t| spilled_temp_locs.contains_key(t)) {
