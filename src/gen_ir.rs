@@ -346,6 +346,7 @@ impl Generator {
             .truncate(self.prefix.len() - format!("{}", func.name).len() - 3);
 
         flatten_expr(&mut body);
+        let body = put_out_call(body);
         let bbs = generate_bb(body);
 
         let func = Function {
@@ -472,6 +473,86 @@ fn flatten_expr(expr: &mut IRExpr) {
     let mut stmts = Vec::new();
     flatten(&mut stmts, expr, false);
     *expr = IRExpr::Seq(stmts, box mem::replace(expr, IRExpr::Int(0)));
+}
+
+fn put_out_call(expr: IRExpr) -> IRExpr {
+    fn put_out_in_stmt(stmts: &mut Vec<IRStmt>, stmt: &mut IRStmt) {
+        match stmt {
+            IRStmt::Expr(_, expr) | IRStmt::Return(expr) => {
+                put_out(stmts, expr);
+            }
+            IRStmt::Store(dst, src) => {
+                put_out(stmts, dst);
+                put_out(stmts, src);
+            }
+            IRStmt::JumpIf(_, lhs, rhs, _) => {
+                put_out(stmts, lhs);
+                put_out(stmts, rhs);
+            }
+            _ => {}
+        }
+    }
+
+    fn put_out(stmts: &mut Vec<IRStmt>, expr: &mut IRExpr) {
+        match expr {
+            IRExpr::Int(..)
+            | IRExpr::Float(..)
+            | IRExpr::Temp(..)
+            | IRExpr::Addr(..)
+            | IRExpr::Func(..) => {}
+            IRExpr::Add(lhs, rhs)
+            | IRExpr::Sub(lhs, rhs)
+            | IRExpr::Mul(lhs, rhs)
+            | IRExpr::Div(lhs, rhs)
+            | IRExpr::Mod(lhs, rhs)
+            | IRExpr::AddF(lhs, rhs)
+            | IRExpr::SubF(lhs, rhs)
+            | IRExpr::MulF(lhs, rhs)
+            | IRExpr::DivF(lhs, rhs) => {
+                put_out(stmts, lhs);
+                put_out(stmts, rhs);
+            }
+            IRExpr::Not(expr) | IRExpr::Negative(expr) | IRExpr::Load(expr) => put_out(stmts, expr),
+            IRExpr::Call(func, args) => {
+                put_out(stmts, func);
+                for arg in args {
+                    match arg {
+                        IRExpr::Temp(..) => {}
+                        _ => {
+                            let temp = Temp::new();
+                            let mut arg = mem::replace(arg, IRExpr::Temp(temp));
+                            put_out(stmts, &mut arg);
+                            stmts.push(IRStmt::Expr(temp, arg));
+                        }
+                    }
+                }
+            }
+            IRExpr::CCall(_, args) => {
+                for arg in args {
+                    put_out(stmts, arg);
+                }
+
+                let temp = Temp::new();
+                let expr = mem::replace(expr, IRExpr::Temp(temp));
+                stmts.push(IRStmt::Expr(temp, expr));
+            }
+            IRExpr::Seq(..) | IRExpr::DSeq(..) => panic!("no flatten"),
+        }
+    }
+
+    let (old_stmts, mut expr) = match expr {
+        IRExpr::Seq(stmts, expr) => (stmts, expr),
+        _ => panic!(),
+    };
+    let mut new_stmts = Vec::with_capacity(old_stmts.len());
+    for mut stmt in old_stmts {
+        put_out_in_stmt(&mut new_stmts, &mut stmt);
+        new_stmts.push(stmt);
+    }
+
+    put_out(&mut new_stmts, &mut expr);
+
+    IRExpr::Seq(new_stmts, expr)
 }
 
 pub fn generate_bb(expr: IRExpr) -> Vec<BasicBlock> {
